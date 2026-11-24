@@ -23,9 +23,12 @@ var gate_dmg: Array = [0, 0] # 입구별 성 피해
 var leaks: Dictionary = {}   # 성에 도착한 적 종류별 수
 var speed := 1               # 전투 배속 (2배는 접속 중인 전원 동의)
 var ice_t: Dictionary = {}   # 보스가 남긴 빙판 칸 -> 남은 시간
+var hp_log: Array = []       # 웨이브마다 끝났을 때 본부 내구도 (결과 화면)
+var tower_log: Dictionary = {}  # 포탑 id -> [종류, 단계, 갈래, 주인, 피해, 처치] (결과 화면의 가장 일 많이 한 포탑)
 var undo_flags: Array = []   # 손님 사본: 자리별 되돌리기 가능 여부
 
 var _queue: Array = []
+var _rq: Array = []          # 손님 사본: 아직 안 나온 적 [입구, 종류, 수]
 var _can_call := false       # 손님 쪽 사본: 호스트가 알려준 일찍 부르기 가능 여부
 var is_copy := false
 var _wave_t := 0.0
@@ -47,7 +50,7 @@ func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
 		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kit_ok(kits[i]) else GData.DEFAULT_KIT.duplicate()
 		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
 			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
-			"fast": false, "free_up": 0, "vote": "", "call": false})
+			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0})
 	_make_plan()
 
 
@@ -73,6 +76,47 @@ func cap() -> int:
 ## 지금 웨이브의 입구별 적 구성
 func wave_plan() -> Array:
 	return plan
+
+
+## 아직 안 나온 적 [입구, 종류, 수]
+func _queue_rows() -> Array:
+	if is_copy:
+		return _rq
+	var by := {}
+	var out := []
+	for q in _queue:
+		var key := "%d|%s" % [int(q["e"]), q["type"]]
+		if not by.has(key):
+			by[key] = [int(q["e"]), str(q["type"]), 0]
+			out.append(by[key])
+		by[key][2] += 1
+	return out
+
+
+func queued() -> int:
+	var n := 0
+	for row in _queue_rows():
+		n += int(row[2])
+	return n
+
+
+## 이번 웨이브에 남은 적 (나온 적 + 아직 안 나온 적) [입구, 종류, 수]
+func remaining() -> Array:
+	var by := {}
+	var out := []
+	for en in enemies:
+		var key := "%d|%s" % [int(en["e"]), en["type"]]
+		if not by.has(key):
+			by[key] = [int(en["e"]), str(en["type"]), 0]
+			out.append(by[key])
+		by[key][2] += 1
+	for row in _queue_rows():
+		var key := "%d|%s" % [int(row[0]), row[1]]
+		if not by.has(key):
+			by[key] = [int(row[0]), str(row[1]), 0]
+			out.append(by[key])
+		by[key][2] += int(row[2])
+	return out
 
 
 func _make_plan() -> void:
@@ -194,6 +238,7 @@ func _call_early() -> void:
 		p["mat"] = mini(int(p["mat"]) + GData.MAT_WAVE, GData.MAT_MAX)
 		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": "", "early": bonus}
+	_log_hp()
 	fx.append({"k": "early", "n": bonus})
 	_advance()
 	_start_wave()
@@ -440,9 +485,30 @@ func _edit(seat: int, c: Dictionary) -> String:
 	board.paths[e] = r["path"]
 	players[seat]["mat"] = clampi(int(players[seat]["mat"]) - cost, 0, GData.MAT_MAX)
 	drafts.erase(seat)
+	players[seat]["roads"] = int(players[seat].get("roads", 0)) + 1
 	for p in players:
 		p["ready"] = false
 	return ""
+
+
+func _log_hp() -> void:
+	if hp_log.size() < wave:
+		hp_log.resize(wave)
+	hp_log[wave - 1] = hp
+
+
+func _log_tower(s: Dictionary, owner: int, dmg: float, kill: bool) -> void:
+	var id := int(s.get("tid", -1))
+	if id < 0 or not towers.has(id):
+		return
+	var t: Dictionary = towers[id]
+	var row: Array = tower_log.get(id, [t["type"], 1, "", owner, 0.0, 0])
+	row[1] = int(t["lv"])
+	row[2] = str(t["branch"])
+	row[4] = float(row[4]) + dmg
+	if kill:
+		row[5] = int(row[5]) + 1
+	tower_log[id] = row
 
 
 func can_undo(seat: int) -> bool:
@@ -663,6 +729,7 @@ func _trap(en: Dictionary, cell: Vector2i) -> void:
 		if int(t["x"]) != cell.x or int(t["y"]) != cell.y or not is_trap(t) or int(t["uses"]) <= 0:
 			continue
 		var s := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
+		s["tid"] = int(t["id"])
 		t["uses"] = int(t["uses"]) - 1
 		if int(t["uses"]) <= 0:
 			version += 1
@@ -735,6 +802,7 @@ func _fire(dt: float) -> void:
 		if t["cd"] > 0.0:
 			continue
 		var s := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
+		s["tid"] = int(t["id"])
 		if bool(s["support"]) or bool(s["trap"]):
 			continue
 		s["range"] = tower_range(t)
@@ -912,6 +980,7 @@ func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false) -> voi
 	dmg = minf(dmg, float(en["hp"]))
 	en["hp"] = float(en["hp"]) - dmg
 	players[owner]["dmg"] += dmg
+	_log_tower(s, owner, dmg, float(en["hp"]) <= 0.0)
 	if dmg >= 12.0:
 		var at := _pos(en)
 		fx.append({"k": "num", "x": at.x, "y": at.y, "n": roundi(dmg)})
@@ -955,6 +1024,7 @@ func _finish_wave() -> void:
 		p["mat"] = mini(int(p["mat"]) + GData.MAT_WAVE, GData.MAT_MAX)
 		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
+	_log_hp()
 	if wave >= GData.LAST_WAVE:
 		cleared = true
 		phase = "over"
@@ -1019,7 +1089,7 @@ func to_data() -> Dictionary:
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
 		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "gd": gate_dmg,
-		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data()}
+		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "tl": _tower_log_data()}
 
 
 func _ice_data() -> Array:
@@ -1078,6 +1148,13 @@ func load_data(d: Dictionary) -> void:
 	speed = int(d.get("sp", 1))
 	_can_call = bool(d.get("cc", false))
 	undo_flags = d.get("un", [])
+	_rq = d.get("rq", [])
+	hp_log = []
+	for v in d.get("hl", []):
+		hp_log.append(int(v) if v != null else 0)
+	tower_log = {}
+	for row in d.get("tl", []):
+		tower_log[int(row[0])] = [str(row[1]), int(row[2]), str(row[3]), int(row[4]), float(row[5]), int(row[6])]
 	ice_t = {}
 	var it: Array = d.get("it", [])
 	for k in range(0, it.size() - 1, 2):
@@ -1099,3 +1176,14 @@ func load_enemies(rows: Array) -> void:
 			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "shred": float(r[8]) if r.size() > 8 else 0.0, "shred_t": 0.0,
 			"oil": 1.0 if r.size() > 9 and bool(r[9]) else 0.0, "sh": float(r[10]) if r.size() > 10 else 0.0, "sk": float(r[11]) if r.size() > 11 else 0.0,
 			"cell": -1, "done": []})
+
+
+## 결과 화면용: 피해가 큰 포탑 3개만 보낸다
+func _tower_log_data() -> Array:
+	var ids := tower_log.keys()
+	ids.sort_custom(func(a, b): return float(tower_log[a][4]) > float(tower_log[b][4]))
+	var out := []
+	for id in ids.slice(0, 3):
+		var r: Array = tower_log[id]
+		out.append([id, r[0], r[1], r[2], r[3], snappedf(float(r[4]), 1.0), r[5]])
+	return out

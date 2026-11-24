@@ -177,7 +177,7 @@ static func best_road(m: GMatch, seat: int) -> Dictionary:
 					if gain > best_gain:
 						best_gain = gain
 						best = {"e": e, "i": i, "kind": kind, "side": side, "path": path, "cost": r["cost"]}
-	return best if best_gain >= 1.0 else {}
+	return best if best_gain >= 0.5 else {}
 
 
 ## 길을 바꿨을 때 사거리 안에 들어오는 길 칸 증가량 (only >= 0 이면 그 포탑만)

@@ -44,9 +44,9 @@ const CFG_DEFAULT := {"font": 100, "fx_low": false, "thick": false, "shake": 30,
 const OWNER := [Color("E0533D"), Color("3D6FD1"), Color("E9B935"), Color("38A672")]
 const OWNER_TEXT := [Color("FF8A78"), Color("7FA6F0"), Color("E9B935"), Color("5FCB97")]
 const MARK := ["●", "▲", "■", "◆"]
-const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "oil": 3, "flame": 4, "magnet": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9}
-const LOOK_COL := [0, 1, 2, 3, 5]          # 적 그림 칸: 일반병·떼거리·중장갑·돌격병·보스
-const LOOK_SIZE := [36.0, 34.0, 34.0, 34.0, 58.0]
+const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "magnet": 3, "oil": 4, "flame": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9}
+const TW := Vector2(120, 168)              # 포탑 그림 한 칸: 칸(0..100) 기준 왼쪽 10, 위로 64
+const LOOK_SCALE := [0.551, 0.551, 0.551, 0.551, 0.551, 0.798]   # 적 그림 칸: 일반병·돌격병·중장갑·떼거리·치유사·보스 (칸 38px 기준)
 const PRIO := {"first": "앞선 적", "strong": "강한 적", "near": "가까운 적"}
 const PING_ORDER := ["look", "danger", "build", "road", "mine"]
 const PING_COL := [Color("3F9BD6"), Color("D2452F"), Color("E9B935"), Color("C9A15F"), Color("38A672")]
@@ -97,7 +97,11 @@ var _menu_focus := 0
 var _record := {}
 var _record_done := false
 var _flip := 0
-var _trail := {}             # 길 그리기 중: {e, i, cells[], j}
+var _trail := {}
+var _face := {}
+var _wheel := {}              # 핑 휠: {at(격자), from(화면)}
+var _kit_sent := false
+const QUICK := ["여기 막아 줘", "골드 좀 나눠 줘", "길 늘려 줘", "준비 됐어"]               # 적이 바라보는 쪽 (좌우 반전)             # 길 그리기 중: {e, i, cells[], j}
 var _kit_open := false
 var _kit_pick: Array = []
 var _summary_wave := 0
@@ -125,6 +129,8 @@ var build_btns := {}
 var road_btns := {}
 var slot_btns: Array = []
 var kit_btns := {}
+var lobby_kit := {}
+var diff_btns := {}
 var fix_btn
 var confirm_btn: Button
 var cancel_btn: Button
@@ -370,6 +376,12 @@ func _build_lobby() -> void:
 	for c in 4:
 		col_btns.append(_btn(lobby, Rect2(), "", _on_color.bind(c), "clear"))
 	ready_lobby = _btn(lobby, Rect2(), "준비 완료", _on_lobby_ready, "pri", 14)
+	for k in GData.TOWER_ORDER:
+		lobby_kit[k] = _btn(lobby, Rect2(), "", _on_lobby_kit.bind(k), "clear")
+		lobby_kit[k].tooltip_text = "%s · %s" % [GData.TOWERS[k]["name"], GData.TOWERS[k]["role"]]
+	for k in GData.DIFFICULTY:
+		diff_btns[k] = _btn(lobby, Rect2(), str(GData.DIFFICULTY[k][2]), _on_diff.bind(k), "sec", 12)
+		diff_btns[k].toggle_mode = true
 	_btn(lobby, Rect2(997, 625, 61, 46), "나가기", _on_leave)
 	start_btn = _btn(lobby, Rect2(1074, 625, 153, 50), "시작", _on_start, "pri", 16)
 
@@ -528,8 +540,8 @@ func _place() -> void:
 		return
 	var scale: float = float(canvas.getBoundingClientRect().width) / maxf(v.x, 1.0)
 	if _screen == "lobby":
-		var at := _crew_rect(maxi(s.seat, 0) if s != null else 0).position + Vector2(108, 40)
-		ui.show("name", "내 이름 (10자)", 10, _off.x + at.x, _off.y + at.y, 177, scale, true)
+		var at := _crew_rect(maxi(s.seat, 0) if s != null else 0).position + Vector2(10, 52)
+		ui.show("name", "내 이름 (10자)", 10, _off.x + at.x, _off.y + at.y, 130, scale, true)
 	if _screen == "menu" and _code_open:
 		ui.show("code", "방 코드 12자리", 14, _off.x + 382, _off.y + 322, 210, scale, false)
 	else:
@@ -665,6 +677,35 @@ func _room_code() -> String:
 
 func _on_color(c: int) -> void:
 	s.set_seat({"col": c})
+
+
+func _on_lobby_kit(k: String) -> void:
+	if s == null or s.seat < 0 or s.seat >= s.seats.size():
+		return
+	var kit: Array = (s.seats[s.seat].get("kit", GData.DEFAULT_KIT) as Array).duplicate()
+	if kit.has(k):
+		if kit.size() <= 1:
+			return
+		kit.erase(k)
+	elif kit.size() < GData.KIT_SIZE:
+		kit.append(k)
+	else:
+		_say("공구함이 가득 찼어요 · 먼저 하나를 빼 주세요")
+		return
+	var ordered := []
+	for t in GData.TOWER_ORDER:
+		if kit.has(t):
+			ordered.append(t)
+	s.seats[s.seat]["kit"] = ordered
+	if ordered.size() == GData.KIT_SIZE:
+		s.set_seat({"kit": ordered})
+		if web:
+			JavaScriptBridge.get_interface("GilUI").save_key("kit", ",".join(ordered))
+
+
+func _on_diff(k: String) -> void:
+	if s and s.is_host:
+		s.set_difficulty(k)
 
 
 func _on_lobby_ready() -> void:
@@ -976,8 +1017,8 @@ func _update_lobby(delta: float) -> void:
 	var crew := _crew_rect(maxi(mine, 0)).position
 	for c in 4:
 		var b: Button = col_btns[c]
-		b.position = crew + Vector2(108 + c * 44, 94)
-		b.size = Vector2(38, 38)
+		b.position = crew + Vector2(12 + c * 34, 84)
+		b.size = Vector2(30, 30)
 		b.visible = mine >= 0
 		var taken := false
 		for i in s.seats.size():
@@ -985,8 +1026,8 @@ func _update_lobby(delta: float) -> void:
 				taken = true
 		b.disabled = taken
 	ready_lobby.visible = mine >= 0 and mine < s.seats.size()
-	ready_lobby.position = crew + Vector2(15, 162)
-	ready_lobby.size = Vector2(270, 42)
+	ready_lobby.position = crew + Vector2(10, 236)
+	ready_lobby.size = Vector2(130, 34)
 	if ready_lobby.visible:
 		var r: bool = s.seats[mine]["ready"]
 		ready_lobby.text = "준비 취소" if r else "준비 완료"
@@ -995,10 +1036,30 @@ func _update_lobby(delta: float) -> void:
 	for st in s.seats:
 		if st["ready"]:
 			ready_n += 1
+	var my_kit: Array = s.seats[mine].get("kit", GData.DEFAULT_KIT) if mine >= 0 and mine < s.seats.size() else []
+	for i in GData.TOWER_ORDER.size():
+		var k: String = GData.TOWER_ORDER[i]
+		lobby_kit[k].position = Vector2(348 + i * 61, 470)
+		lobby_kit[k].size = Vector2(57, 96)
+		lobby_kit[k].visible = mine >= 0
+	var di := 0
+	for k in GData.DIFFICULTY:
+		diff_btns[k].position = Vector2(49 + di * 80, 546)
+		diff_btns[k].size = Vector2(76, 32)
+		diff_btns[k].disabled = not s.is_host
+		diff_btns[k].set_pressed_no_signal(s.difficulty == k)
+		di += 1
 	start_btn.visible = s.is_host
 	start_btn.disabled = s.seats.size() < 2 or ready_n < s.seats.size()
 	start_btn.text = "시작 · 준비 %d/%d" % [ready_n, s.seats.size()]
 	_place()
+	if web and not _kit_sent and mine >= 0 and mine < s.seats.size():
+		_kit_sent = true
+		var saved := str(JavaScriptBridge.get_interface("GilUI").load_key("kit"))
+		var kit := Array(saved.split(",")) if saved != "" else []
+		if GMatch.kit_ok(kit):
+			s.seats[mine]["kit"] = kit
+			s.set_seat({"kit": kit})
 	_name_t -= delta
 	if web and _name_t <= 0.0 and mine >= 0:
 		_name_t = 0.4
@@ -1526,6 +1587,12 @@ func _on_ping_kind(k: String) -> void:
 func _gui_input(ev: InputEvent) -> void:
 	if s == null or s.m == null or _screen != "game":
 		return
+	if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT and not _wheel.is_empty():
+		var kind := _wheel_kind()
+		var at: Vector2 = _wheel["at"]
+		_wheel = {}
+		s.command({"op": "ping", "kind": kind, "x": at.x, "y": at.y})
+		return
 	if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT and not _trail.is_empty():
 		var path := _trail_path(s.m)
 		if not path.is_empty():
@@ -1543,9 +1610,58 @@ func _gui_input(ev: InputEvent) -> void:
 			selected = -1
 		elif ev.button_index == MOUSE_BUTTON_LEFT and inside:
 			if ev.alt_pressed:
-				s.command({"op": "ping", "kind": "look", "x": grid.x, "y": grid.y})
+				_wheel = {"at": grid, "from": ev.position - _off}
 			else:
 				_click(grid)
+
+
+## 휠에서 고른 핑: 위 주목, 오른쪽 위험, 오른쪽 아래 건설 요청, 왼쪽 아래 길 변경, 왼쪽 내가 맡을게
+func _wheel_kind() -> String:
+	var d: Vector2 = (get_local_mouse_position() - _off) - Vector2(_wheel["from"])
+	if d.length() < 22.0:
+		return "look"
+	var a := fposmod(rad_to_deg(d.angle()) + 90.0 + 36.0, 360.0)
+	return PING_ORDER[int(a / 72.0) % 5]
+
+
+func _draw_wheel() -> void:
+	if _wheel.is_empty():
+		return
+	var c: Vector2 = _wheel["from"]
+	var pick := _wheel_kind()
+	var labels := {"look": "주목", "danger": "위험", "build": "건설 요청", "road": "길 변경", "mine": "내가 맡을게"}
+	draw_circle(c, 104.0, Color(0.1, 0.11, 0.12, 0.92))
+	for i in 5:
+		var k: String = PING_ORDER[i]
+		var a0 := deg_to_rad(-90.0 - 36.0 + i * 72.0)
+		var pts := PackedVector2Array()
+		for n in 13:
+			pts.append(c + Vector2.from_angle(a0 + deg_to_rad(72.0) * n / 12.0) * 100.0)
+		for n in 13:
+			pts.append(c + Vector2.from_angle(a0 + deg_to_rad(72.0) * (12 - n) / 12.0) * 36.0)
+		if k == pick:
+			draw_colored_polygon(pts, Color(PING_COL[i], 0.85))
+		pts.append(pts[0])
+		draw_polyline(pts, Color(0.06, 0.07, 0.08), 2.0, true)
+		var mid := c + Vector2.from_angle(a0 + deg_to_rad(36.0)) * 68.0
+		_icon(Vector2i(i, 1), Rect2(mid + Vector2(-10, -22), Vector2(20, 20)), Color.WHITE if k == pick else PING_COL[i])
+		_t(mid + Vector2(0, 0), labels[k], 12, INK, true, 1)
+	draw_circle(c, 34.0, Color(0.16, 0.17, 0.19))
+	_t(c + Vector2(0, -8), "Alt", 12, SUB, true, 1)
+
+
+## 빠른 요청 (F1~F4): Alt 를 누르고 있거나 핑 휠을 열면 보인다
+func _draw_quick() -> void:
+	if _wheel.is_empty() and not Input.is_key_pressed(KEY_ALT):
+		return
+	var r := Rect2(16, 220, 230, 196)
+	_card(r, Color(0.11, 0.12, 0.13, 0.94), LINE)
+	_t(r.position + Vector2(12, 10), "빠른 요청 · 숫자키", 12, SUB, true)
+	for i in QUICK.size():
+		var b := Rect2(r.position + Vector2(12, 36 + i * 38), Vector2(206, 32))
+		_metal(b, PANEL_HI, PANEL_LO, LINE, 4.0)
+		_t(b.position + Vector2(84, 7), QUICK[i], 13, INK, true, 1)
+		_key_chip(b.position + Vector2(170, 6), "F%d" % (i + 1))
 
 
 func _click(grid: Vector2) -> void:
@@ -1639,6 +1755,8 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 			if confirm_btn.visible and not confirm_btn.disabled:
 				_on_confirm()
 		KEY_Q: _key_mode("ability", ability_btn)
+		KEY_F1, KEY_F2, KEY_F3, KEY_F4:
+			s.command({"op": "chat", "text": QUICK[ev.keycode - KEY_F1]})
 		KEY_SPACE: _on_ready()
 		KEY_N: _on_call()
 
@@ -1735,26 +1853,38 @@ func _mk(t: Dictionary) -> int:
 	return 0 if lv <= 1 else (1 if lv == 2 else (2 if str(t["branch"]) == "a" else 3))
 
 
+## 지도 위 포탑: 칸 왼쪽 위(cell_pos)에 기초를 두고 위로 솟는다 (3/4 시점)
 func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Vector2, cell_px: float, tint := Color.WHITE) -> void:
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
-	var src := Rect2((mk * 4 + col) * 128, int(TOWER_ROW[type]) * 128, 128, 128)
 	var u := cell_px / 100.0
-	draw_texture_rect_region(TEX_TOWERS, Rect2(cell_pos - Vector2(8, 14) * u, Vector2(116, 116) * u), src, tint)
+	draw_texture_rect_region(TEX_TOWERS, Rect2(cell_pos + Vector2(-10, -64) * u, TW * u), _tower_src(type, mk, col), tint)
+
+
+func _tower_src(type: String, mk: int, col: int) -> Rect2:
+	return Rect2((mk * 4 + col) * TW.x, int(TOWER_ROW[type]) * TW.y, TW.x, TW.y)
+
+
+## 버튼·정보창 아이콘: 그림 전체를 r 안에 맞춘다
+func _tower_icon(type: String, lv: int, branch: String, col: int, r: Rect2, tint := Color.WHITE) -> void:
+	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
+	var k := minf(r.size.x / TW.x, r.size.y / TW.y)
+	var size := TW * k
+	draw_texture_rect_region(TEX_TOWERS, Rect2(r.position + (r.size - size) * Vector2(0.5, 1.0), size), _tower_src(type, mk, col), tint)
 
 
 func _enemy_icon(type: String, r: Rect2, tint := Color.WHITE) -> void:
 	var look: Array = GData.ENEMIES[type]["look"]
-	var col: int = LOOK_COL[int(look[0])]
 	var t := tint
 	if str(look[1]) != "":
 		t = tint * Color.WHITE.lerp(Color(str(look[1])), 0.55)
-	draw_texture_rect_region(TEX_ENEMIES, r, Rect2(col * 128, 0, 128, 128), t)
+	draw_texture_rect_region(TEX_ENEMIES, r, Rect2(int(look[0]) * 128, 0, 128, 128), t)
 
 
+## 적 그림 한 칸(128)의 화면 크기
 func _enemy_px(type: String) -> float:
 	var look: Array = GData.ENEMIES[type]["look"]
 	var k := 1.0 if type != "mini" else 0.7
-	return float(LOOK_SIZE[int(look[0])]) * k * CELL / 28.0
+	return 128.0 * float(LOOK_SCALE[int(look[0])]) * k * CELL / 38.0
 
 
 func _gate_badge(center: Vector2, e: int) -> void:
@@ -1928,23 +2058,32 @@ func _zone_tag(center: Vector2, text: String, edge: Color) -> void:
 	_t(Vector2(x + 7, center.y - 9), text, 12, Color.WHITE, true)
 
 
-func _draw_road(path: Array, theme := -1, broken := false) -> void:
+func _draw_road(path_in: Array, theme := -1, broken := false) -> void:
 	var layers: Array = GData.THEMES[_theme if theme < 0 else theme]["road"]
+	var path := path_in
+	if not path_in.is_empty():      # 입구는 맵 밖에서 들어오는 것처럼 가장자리 너머로 잇는다
+		var g: Vector2i = path_in[0]
+		var out := Vector2i(-1 if g.x == 0 else (1 if g.x == GData.W - 1 else 0), 0)
+		if out == Vector2i.ZERO:
+			out = Vector2i(0, -1 if g.y == 0 else (1 if g.y == GData.H - 1 else 0))
+		if out != Vector2i.ZERO:
+			path = [g + out * 2, g + out] + path_in
 	for layer in layers:
 		var col := Color(str(layer[0]), float(layer[3]))
 		if broken:
 			col = col.lerp(Color("B83A2B"), 0.62)
 		var w := CELL * float(layer[1])
+		var sh := Vector2(2, 3) if str(layer[0]) == "#000000" else Vector2.ZERO      # 그림자는 오른쪽 아래로
 		for i in range(1, path.size()):
-			var a := _p(Vector2(path[i - 1]) + Vector2(0.5, 0.5))
-			var b := _p(Vector2(path[i]) + Vector2(0.5, 0.5))
+			var a := _p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)) + sh
+			var b := _p(Vector2(path[i]) + Vector2(0.5, 0.5)) + sh
 			if int(layer[2]) == 1:
 				draw_dashed_line(a, b, col, w, 5.0)
 			else:
 				draw_line(a, b, col, w)
 		if int(layer[2]) == 0 and w > 3.0:
 			for c in path:
-				draw_circle(_p(Vector2(c) + Vector2(0.5, 0.5)), w * 0.5, col)
+				draw_circle(_p(Vector2(c) + Vector2(0.5, 0.5)) + sh, w * 0.5, col)
 
 
 func _draw_chevrons(path: Array, col := Color(0.1, 0.08, 0.05, 0.8)) -> void:
@@ -2118,6 +2257,45 @@ func _draw_draft_one(m: GMatch, edit: Dictionary, col: Color) -> void:
 		_dashed_rect(Rect2(a + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)), AMBER)
 
 
+func _ab_marker(at: Vector2, label: String) -> void:
+	draw_circle(at, 13.0, Color("2A1E12"))
+	draw_arc(at, 13.0, 0, TAU, 24, AMBER, 2.4, true)
+	_t(at + Vector2(0, -9), label, 13, AMBER, true, 1)
+
+
+func _draw_ab(m: GMatch) -> void:
+	if _trail.is_empty():
+		return
+	var e := int(_trail["e"])
+	var a: Vector2i = m.board.paths[e][int(_trail["i"])]
+	_ab_marker(_p(Vector2(a) + Vector2(0.5, 0.5)), "A")
+	var cells: Array = _trail["cells"]
+	if not cells.is_empty():
+		_ab_marker(_p(Vector2(cells[-1]) + Vector2(0.5, 0.5)), "B")
+
+
+## 길을 그리는 동안 왼쪽 아래 자재 계기: 지금 → 확정하면
+func _draw_mat_gauge(m: GMatch) -> void:
+	if not mode.begins_with("road:"):
+		return
+	var mat := int(m.players[s.seat]["mat"])
+	var edit := _draft_data(m)
+	var cost := 0 if edit.is_empty() or bool(edit.get("open", false)) else int(edit.get("cost", 0))
+	var after := clampi(mat - cost, 0, GData.MAT_MAX)
+	var r := Rect2(16, 556, 300, 46)
+	_card(r, Color(0.11, 0.12, 0.13, 0.94), LINE)
+	_icon(Vector2i(4, 1), Rect2(r.position + Vector2(10, 13), Vector2(20, 20)), AMBER)
+	_t(r.position + Vector2(36, 14), "공사 자재", 13, INK, true)
+	for k in GData.MAT_MAX:
+		var lit := k < mat
+		var spend := k >= after and k < mat
+		var col := (AMBER if spend else Color("C9A15F")) if lit else Color(0.3, 0.32, 0.35)
+		if cost < 0 and k >= mat and k < after:
+			col = OK_GREEN
+		draw_rect(Rect2(r.position + Vector2(108 + k * 10, 16), Vector2(8, 14)), col)
+	_t(Vector2(r.end.x - 12, r.position.y + 13), "%d → %d" % [mat, after] if cost != 0 else str(mat), 15, INK, true, 2)
+
+
 func _draw_draft_info(m: GMatch, edit: Dictionary) -> void:
 	if edit.is_empty():
 		return
@@ -2161,6 +2339,27 @@ func _draw_draft_info(m: GMatch, edit: Dictionary) -> void:
 		var rr := m.tower_range(t)
 		before += Board.coverage(c, rr, m.board.paths)
 		after += Board.coverage(c, rr, trial)
+	if not _trail.is_empty():
+		var removed := 0
+		for c in old:
+			if not path.has(c):
+				removed += 1
+		var added := 0
+		for c in path:
+			if not old.has(c):
+				added += 1
+		var mouse := get_local_mouse_position() - _off
+		var lines := ["옛 구간 %d칸 → 새 구간 %d칸   자재 %s" % [removed, added, ("-%d" % cost) if cost > 0 else ("+%d" % -cost)],
+			"%s %d → %d칸" % [label, before, after], "%d번 길 %d → %d칸 / 최대 %d" % [e + 1, old.size(), path.size(), m.cap()]]
+		var w := 0.0
+		for l in lines:
+			w = maxf(w, BOLD.get_string_size(l, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x)
+		var br := Rect2(mouse + Vector2(22, -30), Vector2(w + 24, 70))
+		br.position.x = minf(br.position.x, 1020 - br.size.x)
+		_metal(br, Color(0.13, 0.14, 0.16, 0.96), Color(0.1, 0.11, 0.12, 0.96), AMBER, 5.0)
+		for i in lines.size():
+			_t(br.position + Vector2(12, 7 + i * 20), lines[i], 13 if i == 0 else 12, INK if i < 2 else SUB, i == 0)
+		return
 	var r := Rect2(Vector2(808, 520), Vector2(196, 66))
 	draw_style_box(_box(Color(0.1, 0.11, 0.13, 0.96), LINE, 5), r)
 	_t(r.position + Vector2(10, 7), label, 11, SUB)
@@ -2184,9 +2383,7 @@ func _draw_tower(m: GMatch, t: Dictionary) -> void:
 	var trap := GMatch.is_trap(t)
 	var broken := trap and int(t["uses"]) <= 0
 	if trap:
-		var u := CELL / 100.0
-		draw_texture_rect_region(TEX_TOWERS, Rect2(at + Vector2(6, 6) * u, Vector2(88, 88) * u),
-			Rect2((_mk(t) * 4 + owner_col) * 128, int(TOWER_ROW[t["type"]]) * 128, 128, 128), Color(0.55, 0.5, 0.5, 0.8) if broken else Color.WHITE)
+		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(0.55, 0.5, 0.5, 0.8) if broken else Color.WHITE)
 	else:
 		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(1.0, 0.6, 0.5) if float(t.get("heat", 0.0)) > 0.0 else Color.WHITE)
 	if trap:      # 남은 내구
@@ -2213,16 +2410,22 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 	var d: float = _disp.get(int(en["id"]), float(en["dist"]))
 	var pos := Board.pos_on(path, d)
 	var dir := Board.pos_on(path, d + 0.12) - pos
-	var center := _p(pos)
-	var size_px: float = _enemy_px(en["type"]) * 0.96
+	var foot := _p(pos) + Vector2(0, CELL * 0.28)
+	var frame := _enemy_px(en["type"])
+	var unit := frame / 128.0
+	var size_px := 100.0 * unit
+	var center := foot + Vector2(0, -size_px * 0.42)
 	var ghost := m.is_ghost(en)
 	var look: Array = GData.ENEMIES[en["type"]]["look"]
+	draw_arc(foot, size_px * 0.34, 0, TAU, 18, Color("F4BB60", 0.55), 1.4, true)   # 발밑 사프란 고리 (어떤 바닥에서도 읽힘)
 	if str(look[1]) != "":      # 테마 전용 적: 색 고리
-		draw_arc(center, size_px * 0.5, 0, TAU, 20, Color(str(look[1])), 2.2, true)
-	draw_arc(center, size_px * 0.42, 0, TAU, 18, Color(1, 1, 1, 0.42), 1.2, true)   # 어떤 바닥에서도 읽히는 발밑 테두리
-	var angle := dir.angle() + PI * 0.5 if dir.length() > 0.001 else 0.0
-	draw_set_transform(_off + center, angle)
-	_enemy_icon(en["type"], Rect2(-size_px * 0.5, -size_px * 0.5, size_px, size_px), Color(0.72, 1, 0.92, 0.42) if ghost else Color.WHITE)
+		draw_arc(foot, size_px * 0.42, 0, TAU, 20, Color(str(look[1])), 2.2, true)
+	if absf(dir.x) > 0.02:
+		_face[int(en["id"])] = -1.0 if dir.x < 0.0 else 1.0
+	var face: float = _face.get(int(en["id"]), 1.0)
+	var origin := foot - Vector2(66, 108) * unit * Vector2(face, 1.0)
+	draw_set_transform(_off + origin, 0.0, Vector2(face, 1.0))
+	_enemy_icon(en["type"], Rect2(Vector2.ZERO, Vector2(frame, frame)), Color(0.72, 1, 0.92, 0.42) if ghost else Color.WHITE)
 	draw_set_transform(_off)
 	if ghost:
 		_dash_ring(center, size_px * 0.52, Color("7FE8D0"), 1.6)
@@ -2425,7 +2628,9 @@ func _draw_menu() -> void:
 	for path in Board.new(2).paths:
 		_draw_road(path, 3)
 	draw_texture_rect(_tex(3, "over"), Rect2(Vector2.ZERO, STAGE), false)
-	var demo := [["gun", Vector2i(5, 6), 0], ["cannon", Vector2i(6, 7), 1], ["cold", Vector2i(9, 7), 0], ["gun", Vector2i(19, 7), 1], ["cannon", Vector2i(18, 10), 0], ["cold", Vector2i(22, 7), 1]]
+	var demo := [["gun", Vector2i(3, 2), 0], ["cannon", Vector2i(6, 2), 1], ["cold", Vector2i(11, 2), 0], ["shock", Vector2i(15, 4), 1], ["cannon", Vector2i(6, 9), 0], ["sniper", Vector2i(11, 9), 1], ["flame", Vector2i(15, 8), 0]]
+	if GData.LAYOUT != "v2":
+		demo = []
 	for d in demo:
 		_tower_sprite(d[0], 2, "", d[2], _p(Vector2(d[1])), CELL)
 	_shake = keep
@@ -2519,12 +2724,14 @@ func _draw_lobby() -> void:
 	if s.is_host and net.status() != "hosting":
 		code = "여는 중…" if net.status() != "error" else "실패"
 	_t(Vector2(63, 240), code, 24 if code.length() > 8 else 36, AMBER, true)
-	_t(Vector2(49, 380), "경기장", 14, INK, true)
-	_draw_mini(Rect2(49, 408, 218, 146), null)
-	_t(Vector2(49, 560), "초원 · %s · 입구 %d개 · %d/%d명" % ["21×13" if s.seats.size() <= 2 else "25×15", GData.lanes_for(s.seats.size()), s.seats.size(), GSession.MAX_SEATS], 12, SUB)
+	_t(Vector2(49, 372), "맵 · 인원에 따라 자동", 12, SUB, true)
+	_draw_mini(Rect2(49, 392, 218, 104), null)
+	_t(Vector2(49, 500), ("합류 맵 · 2인 · 21×13" if s.seats.size() <= 2 else "네 갈래 맵 · %d인 · 25×15" % s.seats.size()), 12, INK, true)
+	_t(Vector2(49, 526), "난이도" + ("" if s.is_host else " · 방장이 정해요"), 12, SUB, true)
+	_draw_lobby_kit()
 	for i in GSession.MAX_SEATS:
 		_draw_crew(i)
-	_card(Rect2(968, 140, 280, 440), WELL, Color("1A1D20"))
+	_card(Rect2(968, 140, 280, 280), WELL, Color("1A1D20"))
 	_t(Vector2(984, 156), "방 채팅 · 경기 중에도 이어져요", 12, SUB)
 	_card(Rect2(32, 604, 1216, 92))
 	_t(Vector2(53, 630), "포탑 10종 중 5종을 공구함에 담아요 · 1웨이브 준비 중 K 로 바꾸고, 서로 다르게 고를수록 좋아요", 14, INK, true)
@@ -2541,7 +2748,7 @@ func _draw_lobby() -> void:
 
 
 func _crew_rect(i: int) -> Rect2:
-	return Rect2(336 + (i % 2) * 308, 140 + (i / 2) * 224, 300, 216)
+	return Rect2(336 + i * 156, 140, 150, 280)
 
 
 func _draw_crew(i: int) -> void:
@@ -2550,41 +2757,79 @@ func _draw_crew(i: int) -> void:
 	var has := i < s.seats.size()
 	if not has:
 		_dashed_rect(box, Color("5C6268"))
-		_icon(Vector2i(3, 2), Rect2(at + Vector2(132, 56), Vector2(36, 36)), Color(1, 1, 1, 0.55))
-		_t(at + Vector2(150, 104), "반장 %d 자리" % (i + 1), 14, SUB, true, 1)
-		_t(at + Vector2(150, 128), "초대 링크로 친구를 불러 주세요", 12, SUB, false, 1)
+		_icon(Vector2i(3, 2), Rect2(at + Vector2(57, 70), Vector2(36, 36)), Color(1, 1, 1, 0.55))
+		_t(at + Vector2(75, 118), "빈자리", 14, SUB, true, 1)
+		_t(at + Vector2(75, 142), "초대 링크로", 12, SUB, false, 1)
+		_t(at + Vector2(75, 160), "친구를 불러요", 12, SUB, false, 1)
+		if s.seats.size() == 3 and i == 3:
+			_t(at + Vector2(75, 196), "비우면 3인 맵", 11, SUB, false, 1)
 		return
-	_card(box)
-	_t(at + Vector2(15, 12), "반장 %d" % (i + 1), 16, INK, true)
-	if i == 0:
-		_card(Rect2(at + Vector2(248, 11), Vector2(37, 22)), WELL, WELL)
-		_t(at + Vector2(266, 15), "방장", 11, AMBER, true, 1)
-	var prev := Rect2(at + Vector2(15, 40), Vector2(82, 112))
-	draw_rect(prev, GRASS)
-	draw_rect(prev, LINE, false, 1.0)
 	var col := int(s.seats[i]["col"])
-	_tower_sprite(["cold", "cannon", "gun", "cannon"][i], 1, "", col, prev.position + Vector2(13, 36), 56.0)
-	if i != s.seat:
-		_card(Rect2(at + Vector2(108, 40), Vector2(177, 38)), WELL, LINE)
-		_t(at + Vector2(118, 49), str(s.seats[i]["name"]), 14, INK, true)
+	_card(box)
+	draw_rect(Rect2(at, Vector2(box.size.x, 4)), OWNER[col % 4])
+	_tag(at + Vector2(22, 26), col, 22.0)
+	_t(at + Vector2(40, 16), ("%s (나)" % s.seats[i]["name"]) if i == s.seat else str(s.seats[i]["name"]), 14, INK, true)
+	_t(at + Vector2(40, 38), "방장" if i == 0 else "반장 %d" % (i + 1), 11, AMBER if i == 0 else SUB, true)
 	for c in 4:
-		var r := Rect2(at + Vector2(108 + c * 44, 94), Vector2(38, 38))
+		var r := Rect2(at + Vector2(12 + c * 34, 84), Vector2(30, 30))
 		var picked := col == c
 		var taken := false
 		for k in s.seats.size():
 			if k != i and int(s.seats[k]["col"]) == c:
 				taken = true
 		_card(r, Color("2B3035"), AMBER if picked else LINE)
-		if picked:
-			draw_rect(r.grow(-1), AMBER, false, 2.0)
-		_tag(r.get_center(), c, 22.0)
+		_tag(r.get_center(), c, 16.0)
 		if taken:
 			draw_rect(r.grow(-1), Color(0.14, 0.16, 0.17, 0.72))
+	var kit: Array = s.seats[i].get("kit", GData.DEFAULT_KIT)
+	_t(at + Vector2(12, 126), "공구함 %d종" % kit.size(), 11, SUB, true)
+	for j in kit.size():
+		_tower_icon(str(kit[j]), 1, "", col, Rect2(at + Vector2(10 + (j % 3) * 44, 144 + (j / 3) * 46), Vector2(40, 44)))
 	if i != s.seat:
 		var is_ready: bool = s.seats[i]["ready"]
-		var state := Rect2(at + Vector2(15, 162), Vector2(270, 42))
-		_card(state, AMBER if is_ready else Color("33383D"), Color("8E6A12") if is_ready else LINE)
-		_t(state.get_center() + Vector2(0, -8), "준비 완료" if is_ready else "준비 중…", 14, Color("1A1D20") if is_ready else SUB, true, 1)
+		_t(at + Vector2(12, 246), "✓ 준비 완료" if is_ready else "× 준비 중", 13, OK_GREEN if is_ready else SUB, true)
+
+
+## 내 공구함: 10종 중 5종, 팀원과 겹치면 표시, 팀 전체에서 빠진 종류
+func _draw_lobby_kit() -> void:
+	if s.seat < 0 or s.seat >= s.seats.size():
+		return
+	var r := Rect2(336, 430, 624, 150)
+	_card(r)
+	var mine: Array = s.seats[s.seat].get("kit", GData.DEFAULT_KIT)
+	var others := {}
+	var team := {}
+	for i in s.seats.size():
+		for t in s.seats[i].get("kit", GData.DEFAULT_KIT):
+			team[t] = true
+			if i != s.seat:
+				others[t] = true
+	var overlap := 0
+	for t in mine:
+		if others.has(t):
+			overlap += 1
+	_t(r.position + Vector2(12, 10), "내 공구함 %d / %d" % [mine.size(), GData.KIT_SIZE], 14, INK, true)
+	_t(r.position + Vector2(150, 12), "다시 누르면 빼기 · 겹침 %d종 · 팀 전체 %d / 10종" % [overlap, team.size()], 12, AMBER, true)
+	var missing := []
+	for t in GData.TOWER_ORDER:
+		if not team.has(t):
+			missing.append(GData.TOWERS[t]["name"])
+	var miss_text := "없음"
+	if not missing.is_empty():
+		miss_text = ", ".join(missing.slice(0, 2)) + (" 외" if missing.size() > 2 else "")
+	_t(Vector2(r.end.x - 12, r.position.y + 12), "빠진 종류 · " + miss_text, 11, SUB, true, 2)
+	var col := int(s.seats[s.seat]["col"]) % 4
+	for i in GData.TOWER_ORDER.size():
+		var k: String = GData.TOWER_ORDER[i]
+		var cell := Rect2(Vector2(348 + i * 61, 470), Vector2(57, 96))
+		var on := mine.has(k)
+		_metal(cell, Color("4a4334") if on else PANEL_HI, Color("3c3628") if on else PANEL_LO, AMBER if on else LINE, 4.0)
+		_tower_icon(k, 1, "", col, Rect2(cell.position + Vector2(6, 4), Vector2(45, 52)), Color.WHITE if on else Color(1, 1, 1, 0.55))
+		var name: String = GData.TOWERS[k]["name"]
+		_t(cell.position + Vector2(28.5, 58), name.replace("탑", "") if name.length() > 4 else name, 11, INK if on else SUB, true, 1)
+		_t(cell.position + Vector2(28.5, 75), str(int(GData.TOWERS[k]["cost"])), 11, AMBER, true, 1)
+		if on and others.has(k):
+			_t(cell.position + Vector2(52, 2), "겹침", 10, AMBER, true, 2)
 
 
 func _dashed_rect(r: Rect2, col: Color) -> void:
@@ -2626,14 +2871,18 @@ func _draw_mini(r: Rect2, m) -> void:
 	draw_set_transform(_off)
 
 
-func _draw_gate3(cell: Vector2i, theme: int, base: Transform2D) -> void:
-	var k := CELL / 15.0
-	var door := _p(Vector2(cell) + Vector2(0.5, 0.5)) + Vector2(0, 2.25 * k)
-	draw_set_transform_matrix(base * Transform2D(-PI * 0.5, door))
-	var size_px := 55.0 * k
-	draw_texture_rect(_tex(theme, "gate3"), Rect2(-size_px * 0.668, -size_px * 0.5, size_px, size_px), false)
-	draw_set_transform_matrix(base)
-	_gate_badge(_p(Vector2(cell) + Vector2(2.2, 0.5)), 2)
+## 새로 열린 입구 (그림에 없는 입구): 경고등 기둥 두 개 + 번호판
+func _draw_gate(cell: Vector2i, e: int) -> void:
+	var c := _p(Vector2(cell) + Vector2(0.5, 0.5))
+	var across := Vector2(1, 0) if cell.y == 0 or cell.y == GData.H - 1 else Vector2(0, 1)
+	for side in [-1.0, 1.0]:
+		var base: Vector2 = c + across * side * CELL * 0.62
+		draw_rect(Rect2(base + Vector2(-3, -CELL * 0.9), Vector2(6, CELL * 0.9)), Color("24282C"))
+		for k in 3:
+			draw_rect(Rect2(base + Vector2(-3, -CELL * 0.9 + 6 + k * 9), Vector2(6, 4)), Color("D9A21B"))
+		draw_circle(base + Vector2(0, -CELL * 0.9), 4.0, LAMP)
+		draw_circle(base + Vector2(0, -CELL * 0.9), 7.0, Color(LAMP, 0.25 + 0.15 * sin(_tick * 5.0)))
+	_gate_badge(c + Vector2(0, -CELL * 1.25), e)
 
 
 func _draw_game() -> void:
@@ -2655,16 +2904,28 @@ func _draw_game() -> void:
 	_draw_grid(m)
 	_draw_draft(m, edit)
 	_draw_over()                       # 04~05 작업장·랜드마크·본부·입구
+	if m.board.opened and GData.LAYOUT == "v2":      # 2인 유령 숲의 새 입구는 그림에 없어 직접 그린다
+		_draw_gate(m.board.paths[-1][0], m.board.paths.size() - 1)
 	_draw_castle_damage(m)
 	if m.phase == "prep" and m.towers.has(selected) and mode == "":
 		_draw_range_focus(m)
+	var stand := []      # 서 있는 것은 아래쪽(y)이 큰 것을 나중에 그린다
 	for id in m.towers:
-		_draw_tower(m, m.towers[id])
+		var t: Dictionary = m.towers[id]
+		stand.append([float(t["y"]) + (0.0 if GMatch.is_trap(t) else 0.9), 0, t])
 	for en in m.enemies:
-		_draw_enemy(m, en)
+		var pos := Board.pos_on(m.board.paths[int(en["e"])], float(_disp.get(int(en["id"]), float(en["dist"]))))
+		stand.append([pos.y + 0.28, 1, en])
+	stand.sort_custom(func(a, b): return a[0] < b[0])
+	for row in stand:
+		if int(row[1]) == 0:
+			_draw_tower(m, row[2])
+		else:
+			_draw_enemy(m, row[2])
 	_draw_fx()
 	_draw_env()                        # 07 환경 효과
 	_draw_pings()                      # 08 선택·핑·건설 정보
+	_draw_ab(m)
 	_draw_cursor(m)
 	if _flash_t > 0.0:
 		draw_arc(_p(_flash), CELL * (0.8 + 0.25 * sin(_tick * 9.0)), 0, TAU, 28, AMBER, 3.0, true)
@@ -2703,6 +2964,9 @@ func _draw_game() -> void:
 	_draw_bar(m)
 	_draw_plates(hud)
 	_draw_bar_art(m)
+	_draw_mat_gauge(m)
+	_draw_quick()
+	_draw_wheel()
 
 
 func _summary_text(m: GMatch) -> String:
@@ -2964,7 +3228,7 @@ func _draw_bar_art(m: GMatch) -> void:
 		if picked:
 			draw_rect(Rect2(t.position.x + 3, t.end.y - 3, t.size.x - 10, 3), AMBER)
 		var tint := Color.WHITE if usable_t else Color(0.6, 0.6, 0.6, 0.55)
-		_tower_sprite(str(names[i]), 1, "", my_col, t.position + Vector2(20, 9), 30.0, tint)
+		_tower_icon(str(names[i]), 1, "", my_col, Rect2(t.position + Vector2(18, 3), Vector2(34, 36)), tint)
 		_t(t.position + Vector2(6, 2), str(i + 1), 12, SUB, true)
 		if not real or m.phase != "prep":
 			_lock(t.position + Vector2(58, 8))
@@ -3013,7 +3277,7 @@ func _draw_kit(m: GMatch) -> void:
 		kit_btns[k].position = cell.position
 		kit_btns[k].size = cell.size
 		_metal(cell, Color("4a4334") if on else PANEL_HI, Color("3c3628") if on else PANEL_LO, AMBER if on else LINE)
-		_tower_sprite(k, 1, "", my_col, cell.position + Vector2(8, 16), 40.0)
+		_tower_icon(k, 1, "", my_col, Rect2(cell.position + Vector2(6, 6), Vector2(44, 68)))
 		_t(cell.position + Vector2(56, 12), str(GData.TOWERS[k]["name"]), 12, INK, true)
 		_t(cell.position + Vector2(56, 32), str(GData.TOWERS[k]["role"]), 11, SUB, true)
 		_t(cell.position + Vector2(56, 52), "%dG" % int(GData.TOWERS[k]["cost"]), 12, AMBER, true)
@@ -3053,7 +3317,7 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 	var head := Rect2(r.position + Vector2(14, 14), Vector2(44, 44))
 	draw_rect(head, Color(0.1, 0.11, 0.12))
 	draw_rect(head, LINE, false, 1.0)
-	_tower_sprite(t["type"], lv, str(t["branch"]), col, head.position + Vector2(5, 7), 34.0)
+	_tower_icon(t["type"], lv, str(t["branch"]), col, head.grow(-2))
 	_t(r.position + Vector2(70, 16), str(d["name"]), 17, INK, true)
 	var mk := "MK-%d" % lv if lv < 3 else "MK-3%s" % str(t["branch"]).to_upper()
 	_t(r.position + Vector2(70, 40), "%s · %s" % [str(m.players[int(t["owner"])]["name"]).left(5), mk], 12, SUB, true)

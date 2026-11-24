@@ -74,7 +74,7 @@ func _init() -> void:
 
 	# 승인 응답이 사라져 재전송돼도 두 번 결제되면 안 된다
 	a.drop_next = true
-	c.command({"op": "build", "type": "gun", "x": 4, "y": 2})
+	c.command({"op": "build", "type": "gun", "x": 2, "y": 2})
 	for _i in 60:
 		h.tick(0.05)
 		c.tick(0.05)
@@ -93,7 +93,7 @@ func _init() -> void:
 			limited = true
 	ok(limited, "연속 전송 제한")
 
-	c.command({"op": "ping", "kind": "danger", "x": 3.5, "y": 8.5})
+	c.command({"op": "ping", "kind": "danger", "x": 3.5, "y": 2.5})
 	pump(h, c)
 	ok(c.pings.size() == 1 and h.pings.size() == 1, "핑 양쪽 표시")
 	ok(c.chat[-1].has("x") and c.place_name(float(c.chat[-1]["x"]), float(c.chat[-1]["y"])).contains("1번"), "핑이 좌표와 함께 채팅에 기록")

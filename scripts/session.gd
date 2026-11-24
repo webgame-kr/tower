@@ -23,7 +23,8 @@ var pings: Array = []    # {seat, kind, x, y, t}
 var toasts: Array = []
 var fx: Array = []
 var outbox: Array = []   # 손님이 보내고 아직 승인받지 못한 요청 {id, c, t}
-var host_away := false   # 방장이 다른 탭을 보면 브라우저가 게임을 멈춘다
+var host_away := false
+var difficulty := "normal"   # 방장이 로비에서 고른다   # 방장이 다른 탭을 보면 브라우저가 게임을 멈춘다
 
 var _host_peer := ""
 var _clock := 0.0
@@ -83,6 +84,7 @@ func _begin() -> void:
 		kits.append(s.get("kit", GData.DEFAULT_KIT))
 	if solo and seats.size() > 1:      # 연습 동료는 사람과 겹치지 않는 포탑을 든다
 		kits[1] = GBot.pick_kit(kits[0])
+	GData.difficulty = difficulty if GData.DIFFICULTY.has(difficulty) else "normal"
 	m = GMatch.new(names, kits)
 	for i in seats.size():
 		m.players[i]["online"] = seats[i]["online"]
@@ -92,6 +94,14 @@ func _begin() -> void:
 	_sent_version = -1
 	_system("경기 시작! 먼저 길과 포탑을 함께 정해 보세요.")
 	_push_state()
+
+
+func set_difficulty(k: String) -> void:
+	if not is_host or m != null or not GData.DIFFICULTY.has(k):
+		return
+	difficulty = k
+	if net and not solo:
+		net.broadcast(_lobby_data())
 
 
 ## 내 이름·색·준비를 바꾼다 (로비)
@@ -256,7 +266,7 @@ func _lobby_data() -> Dictionary:
 	var names := []
 	for s in seats:
 		names.append({"name": s["name"], "online": s["online"], "col": s["col"], "ready": s["ready"], "kit": s.get("kit", GData.DEFAULT_KIT)})
-	return {"t": "lobby", "seats": names}
+	return {"t": "lobby", "seats": names, "df": difficulty}
 
 
 func _host_msg(from: String, d: Dictionary) -> void:
@@ -479,6 +489,7 @@ func _client_msg(from: String, d: Dictionary) -> void:
 			for row in chat:
 				row["seat"] = int(row["seat"])
 		"lobby":
+			difficulty = str(d.get("df", "normal"))
 			seats = []
 			for s in d["seats"]:
 				var kit: Array = []

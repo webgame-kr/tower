@@ -10,9 +10,19 @@ from PIL import Image, ImageOps
 folder = sys.argv[1]
 boxes = json.loads(sys.argv[2])
 for path in glob.glob(os.path.join(folder, "*_base.png")):
-    layout = os.path.basename(path).split("_")[0]
-    x, y, w, h = boxes[layout]
+    key = "_".join(os.path.basename(path).split("_")[:2])
+    x, y, w, h = boxes.get(key) or boxes[key.split("_")[0]]
+    if x <= 0 and y <= 0 and w >= 1600 and h >= 900:
+        continue
     LEFT, TOP, RIGHT, BOTTOM = x + 2, y + 2, x + w - 2, y + h - 2
+    BG = {"grass": "#1F2A1B", "snow": "#1B2630", "sand": "#33261A", "lava": "#120D0C", "ghost": "#0D1512"}
+    if len(sys.argv) > 3:      # 바깥을 테마 배경색으로 채우기
+        im = Image.open(path).convert("RGB")
+        out = Image.new("RGB", im.size, BG[key.split("_")[1]])
+        out.paste(im.crop((x + 2, y + 2, x + w - 2, y + h - 2)), (x + 2, y + 2))
+        out.save(path, optimize=True)
+        print(os.path.basename(path), "filled")
+        continue
     im = Image.open(path).convert("RGB")
     W, H = im.size
     inner = im.crop((LEFT, TOP, RIGHT, BOTTOM))

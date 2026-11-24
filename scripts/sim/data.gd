@@ -50,6 +50,8 @@ const KIT_SIZE := 5           # 공구함에 담는 포탑 수
 static var hp_mul := 1.8      # 적 체력 배율 (밸런스 조정용)
 static var budget_scale := {1: 0.85, 2: 0.85, 3: 1.06, 4: 1.28}
 static var hp_scale := {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.15}
+const DIFFICULTY := {"easy": [0.8, 0.85, "느긋"], "normal": [1.0, 1.0, "보통"], "hard": [1.25, 1.15, "빡빡"]}      # [적 체력, 위협 예산]
+static var difficulty := "normal"
 
 
 static func _cells(raw: Array) -> Array:
@@ -87,29 +89,29 @@ static func use_layout(players: int) -> void:
 		OLD_ROADS = [Rect2i(6, 7, 4, 1), Rect2i(15, 7, 4, 1)]
 		CRACKS = _cells([[7, 2], [7, 3], [17, 2], [17, 3], [7, 11], [7, 12], [17, 11], [17, 12]])
 		SAND_SPOTS = [Vector2(5.5, 3.0), Vector2(19.5, 3.0), Vector2(5.5, 12.0), Vector2(19.5, 12.0), Vector2(8.5, 7.5), Vector2(16.5, 7.5)]
-	else:
+	else:      # 2인 합류 맵 (비주얼 v3): 본부는 오른쪽, 두 길이 본부 앞에서 합류
 		LAYOUT = "v2"
 		W = 21
 		H = 13
-		CASTLE = Rect2i(9, 5, 3, 3)
-		LANDMARK = Rect2i(9, 1, 3, 3)
-		CELL_PX = 36.0
-		ORIGIN = Vector2(262, 110)
-		var a := _cells([[0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [5, 2], [5, 3], [5, 4], [4, 4], [3, 4], [2, 4], [2, 5], [2, 6], [2, 7], [2, 8], [2, 9], [3, 9], [4, 9], [5, 9], [6, 9], [7, 9], [7, 8], [7, 7], [7, 6], [8, 6]])
+		CASTLE = Rect2i(18, 5, 3, 3)
+		LANDMARK = Rect2i(6, 5, 3, 3)
+		CELL_PX = 38.0
+		ORIGIN = Vector2(221, 112)
+		var a := _cells([[0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [4, 2], [4, 3], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [9, 3], [9, 2], [9, 1], [10, 1], [11, 1], [12, 1], [13, 1], [14, 1], [14, 2], [14, 3], [14, 4], [14, 5], [15, 5], [16, 5], [16, 6], [17, 6]])
 		var b: Array = []
 		for c in a:
-			b.append(Vector2i(20 - c.x, 12 - c.y))
+			b.append(Vector2i(c.x, 12 - c.y) if c.y != 6 else c)
 		BASE_PATHS = [a, b]
-		EXTRA_PATH = _cells([[10, 12], [10, 11], [11, 11], [12, 11], [12, 10], [12, 9], [11, 9], [10, 9], [9, 9], [9, 8]])
-		ROCKS = _cells([[6, 2], [6, 3], [14, 9], [14, 10], [0, 6], [0, 7], [20, 5], [20, 6], [15, 0], [16, 0], [15, 1], [5, 12], [4, 12], [5, 11]])
-		PONDS = [Rect2i(12, 0, 3, 3), Rect2i(6, 10, 3, 3)]
-		BLOCKED = Rect2i(9, 9, 4, 4)
-		POCKETS = [Rect2i(3, 5, 4, 4), Rect2i(14, 4, 4, 4)]
-		WORKS = [Rect2i(0, 10, 4, 3), Rect2i(17, 0, 4, 3)]
-		LINES = [Rect2i(8, 5, 1, 3), Rect2i(12, 5, 1, 3)]
-		OLD_ROADS = [Rect2i(1, 11, 4, 1), Rect2i(16, 1, 4, 1)]
-		CRACKS = _cells([[2, 6], [2, 7], [18, 6], [18, 5]])
-		SAND_SPOTS = [Vector2(4.5, 6.5), Vector2(16.5, 6.0), Vector2(4.0, 2.5), Vector2(17.0, 10.5), Vector2(10.5, 4.0), Vector2(10.5, 9.0)]
+		EXTRA_PATH = _cells([[19, 0], [18, 0], [17, 0], [17, 1], [17, 2], [17, 3], [17, 4], [17, 5]])
+		ROCKS = _cells([[2, 3], [2, 7], [12, 3], [13, 8], [6, 12], [7, 12], [1, 6], [11, 10], [19, 10], [8, 0]])      # 장식 자리
+		PONDS = []
+		BLOCKED = Rect2i()
+		POCKETS = [Rect2i(5, 1, 4, 3), Rect2i(5, 9, 4, 3), Rect2i(10, 2, 4, 2), Rect2i(10, 9, 4, 2)]
+		WORKS = []
+		LINES = [Rect2i(15, 6, 1, 1)]
+		OLD_ROADS = [Rect2i(10, 6, 4, 1)]
+		CRACKS = _cells([[4, 2], [4, 3], [4, 10], [4, 9]])
+		SAND_SPOTS = [Vector2(6.5, 2.5), Vector2(11.5, 2.5), Vector2(6.5, 10.5), Vector2(11.5, 10.5), Vector2(16.0, 9.5), Vector2(2.5, 6.5)]
 
 
 ## 처음 열린 입구 수
@@ -155,11 +157,11 @@ static func near_crack(c: Vector2i) -> bool:
 
 
 const THEMES := [
-	{"id": "grass", "name": "초원", "desc": "길 그리기와 포켓 활용 배우기", "landmark": "굴착기", "zone": "", "wipe": "#3F5B31", "road": [["#5A4A36", 0.9, 0, 1], ["#A8936C", 0.76, 0, 1], ["#8C7A58", 0.5, 0, 0.9], ["#A8936C", 0.36, 0, 1]]},
-	{"id": "snow", "name": "설원", "desc": "연못이 얼어 그 위로 길을 낼 수 있어요 · 얼음 길은 빙판", "landmark": "얼어붙은 시추기", "zone": "ice", "wipe": "#DCE8EE", "road": [["#FFFFFF", 1.08, 0, 0.95], ["#C9D6DC", 0.98, 1, 1], ["#68747B", 0.9, 0, 1], ["#8B979E", 0.76, 0, 1], ["#7A868D", 0.5, 0, 0.9], ["#8B979E", 0.36, 0, 1]]},
-	{"id": "sand", "name": "사막", "desc": "옛 도로 칸은 자재 0 · 모래바람 구역은 포탑 사거리 감소", "landmark": "모래에 잠긴 수송차", "zone": "sand", "wipe": "#C9A566", "road": [["#CDAE74", 1, 1, 0.9], ["#4C4844", 0.9, 0, 1], ["#9A958C", 0.76, 0, 1], ["#D9C9A6", 0.05, 1, 0.6]]},
-	{"id": "lava", "name": "화산", "desc": "균열을 지나는 적은 지속 피해 · 균열 옆에는 포탑 금지", "landmark": "파손된 용광로", "zone": "lava", "wipe": "#7A2412", "road": [["#211D1B", 0.9, 0, 1], ["#8A827B", 0.76, 0, 1], ["#6E6862", 0.76, 1, 1], ["#000000", 0.3, 0, 0.18]]},
-	{"id": "ghost", "name": "유령 숲", "desc": "막힌 땅이 열리며 새 입구가 생겨요", "landmark": "거목 급수탑", "zone": "ghost", "wipe": "#2B3F36", "road": [["#4E7A55", 1.02, 1, 0.9], ["#2C312C", 0.9, 0, 1], ["#8E948C", 0.76, 0, 1], ["#7C827A", 0.76, 1, 1]]},
+	{"id": "grass", "name": "초원", "desc": "길 그리기와 포켓 활용 배우기", "landmark": "굴착기", "zone": "", "wipe": "#3F5B31", "road": [["#000000", 0.98, 0, 0.35], ["#5A4A36", 0.94, 0, 1], ["#B39468", 0.74, 0, 1], ["#C9AD80", 0.3, 0, 0.45], ["#9A7C54", 0.05, 1, 0.8]]},
+	{"id": "snow", "name": "설원", "desc": "연못이 얼어 그 위로 길을 낼 수 있어요 · 얼음 길은 빙판", "landmark": "얼어붙은 시추기", "zone": "ice", "wipe": "#DCE8EE", "road": [["#000000", 0.98, 0, 0.35], ["#66767F", 0.94, 0, 1], ["#8F9DA5", 0.74, 0, 1], ["#AAB6BD", 0.3, 0, 0.45], ["#78858D", 0.05, 1, 0.8]]},
+	{"id": "sand", "name": "사막", "desc": "옛 도로 칸은 자재 0 · 모래바람 구역은 포탑 사거리 감소", "landmark": "모래에 잠긴 수송차", "zone": "sand", "wipe": "#C9A566", "road": [["#000000", 0.98, 0, 0.35], ["#6E6253", 0.94, 0, 1], ["#8A7F71", 0.74, 0, 1], ["#A1968A", 0.3, 0, 0.45], ["#6C6256", 0.05, 1, 0.8]]},
+	{"id": "lava", "name": "화산", "desc": "균열을 지나는 적은 지속 피해 · 균열 옆에는 포탑 금지", "landmark": "파손된 용광로", "zone": "lava", "wipe": "#7A2412", "road": [["#000000", 0.98, 0, 0.35], ["#1D1918", 0.94, 0, 1], ["#6A615A", 0.74, 0, 1], ["#7D736B", 0.3, 0, 0.45], ["#4E3A33", 0.05, 1, 0.8]]},
+	{"id": "ghost", "name": "유령 숲", "desc": "막힌 땅이 열리며 새 입구가 생겨요", "landmark": "거목 급수탑", "zone": "ghost", "wipe": "#2B3F36", "road": [["#000000", 0.98, 0, 0.35], ["#2A2F2A", 0.94, 0, 1], ["#6A7066", 0.74, 0, 1], ["#7D8479", 0.3, 0, 0.45], ["#53594F", 0.05, 1, 0.8]]},
 ]
 
 const ICE_SPEED := 1.3
@@ -247,24 +249,24 @@ const TRAP_REPAIR := 1        # 가시 덫개 수리에 드는 공사 자재
 ## trail 지나간 칸 빙판(초), drops [체력 비율들, 적, 수], overheat [주기, 반경, 시간], clone 분신 체력 비율
 const ENEMIES := {
 	"grunt": {"name": "일반병", "hp": 34.0, "armor": 0.0, "speed": 1.25, "hit": 1, "price": 1.0, "look": [0, ""]},
-	"swarm": {"name": "떼거리", "hp": 13.0, "armor": 0.0, "speed": 1.6, "hit": 1, "price": 0.5, "look": [1, ""]},
+	"swarm": {"name": "떼거리", "hp": 13.0, "armor": 0.0, "speed": 1.6, "hit": 1, "price": 0.5, "look": [3, ""]},
 	"heavy": {"name": "중장갑", "hp": 120.0, "armor": 4.0, "speed": 0.8, "hit": 1, "price": 4.0, "look": [2, ""]},
-	"rusher": {"name": "돌격병", "hp": 42.0, "armor": 0.0, "speed": 2.4, "hit": 1, "price": 1.5, "look": [3, ""]},
-	"healer": {"name": "치유사", "hp": 50.0, "armor": 0.0, "speed": 1.1, "hit": 1, "price": 3.0, "heal": 5.0, "heal_r": 2.0, "look": [0, "#64D4A3"]},
-	"sled": {"name": "썰매병", "hp": 40.0, "armor": 0.0, "speed": 1.5, "hit": 1, "price": 2.0, "ice": 2.0, "look": [3, "#BFE3F2"]},
+	"rusher": {"name": "돌격병", "hp": 42.0, "armor": 0.0, "speed": 2.4, "hit": 1, "price": 1.5, "look": [1, ""]},
+	"healer": {"name": "치유사", "hp": 50.0, "armor": 0.0, "speed": 1.1, "hit": 1, "price": 3.0, "heal": 5.0, "heal_r": 2.0, "look": [4, ""]},
+	"sled": {"name": "썰매병", "hp": 40.0, "armor": 0.0, "speed": 1.5, "hit": 1, "price": 2.0, "ice": 2.0, "look": [1, "#BFE3F2"]},
 	"shield": {"name": "방패병", "hp": 70.0, "armor": 2.0, "speed": 1.0, "hit": 1, "price": 3.0, "slow_res": 0.5, "look": [2, "#9CB4C8"]},
-	"worm": {"name": "굴착 벌레", "hp": 60.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "burrow": [3.0, 1.5], "look": [1, "#C9A566"]},
+	"worm": {"name": "굴착 벌레", "hp": 60.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "burrow": [3.0, 1.5], "look": [3, "#C9A566"]},
 	"carrier": {"name": "방패 수송차", "hp": 150.0, "armor": 2.0, "speed": 0.7, "hit": 1, "price": 5.0, "guard": 30.0, "look": [2, "#E9B935"]},
 	"golem": {"name": "내열 골렘", "hp": 160.0, "armor": 6.0, "speed": 0.75, "hit": 1, "price": 5.0, "fireproof": true, "look": [2, "#F47A3A"]},
 	"splitter": {"name": "분열체", "hp": 80.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 3.0, "split": ["mini", 2], "look": [0, "#E0533D"]},
-	"mini": {"name": "작은 분열체", "hp": 25.0, "armor": 0.0, "speed": 1.6, "hit": 1, "price": 0.0, "look": [1, "#E0533D"]},
-	"phantom": {"name": "유령병", "hp": 55.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "phase": [5.0, 2.0], "look": [3, "#8FD9B6"]},
-	"vine": {"name": "덩굴 치유사", "hp": 70.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 4.0, "heal": 4.0, "heal_r": 2.0, "slow_res": 1.0, "look": [0, "#4E7A55"]},
-	"boss": {"name": "초원 대장", "hp": 380.0, "armor": 3.0, "speed": 0.62, "hit": 15, "price": 0.0, "boss": true, "look": [4, ""], "skill": ""},
-	"walker": {"name": "쇄빙 보행기", "hp": 470.0, "armor": 3.0, "speed": 0.6, "hit": 15, "price": 0.0, "boss": true, "trail": 5.0, "look": [4, "#BFE3F2"], "skill": "지나간 길을 5초 동안 빙판으로"},
-	"fortress": {"name": "모래 수송 요새", "hp": 560.0, "armor": 4.0, "speed": 0.5, "hit": 15, "price": 0.0, "boss": true, "drops": [[0.5, 0.0], "swarm", 8], "look": [4, "#E9B935"], "skill": "체력 50%·0%에서 떼거리 8명"},
-	"giant": {"name": "용광로 거인", "hp": 640.0, "armor": 5.0, "speed": 0.55, "hit": 15, "price": 0.0, "boss": true, "overheat": [8.0, 2.0, 2.0], "fireproof": true, "look": [4, "#F47A3A"], "skill": "8초마다 주변 포탑 과열"},
-	"shadow": {"name": "그림자 사령관", "hp": 720.0, "armor": 3.0, "speed": 0.65, "hit": 15, "price": 0.0, "boss": true, "clone": 0.5, "look": [4, "#8FD9B6"], "skill": "체력 50%에서 분신 소환"},
+	"mini": {"name": "작은 분열체", "hp": 25.0, "armor": 0.0, "speed": 1.6, "hit": 1, "price": 0.0, "look": [3, "#E0533D"]},
+	"phantom": {"name": "유령병", "hp": 55.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "phase": [5.0, 2.0], "look": [1, "#8FD9B6"]},
+	"vine": {"name": "덩굴 치유사", "hp": 70.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 4.0, "heal": 4.0, "heal_r": 2.0, "slow_res": 1.0, "look": [4, "#4E7A55"]},
+	"boss": {"name": "초원 대장", "hp": 380.0, "armor": 3.0, "speed": 0.62, "hit": 15, "price": 0.0, "boss": true, "look": [5, ""], "skill": ""},
+	"walker": {"name": "쇄빙 보행기", "hp": 470.0, "armor": 3.0, "speed": 0.6, "hit": 15, "price": 0.0, "boss": true, "trail": 5.0, "look": [5, "#BFE3F2"], "skill": "지나간 길을 5초 동안 빙판으로"},
+	"fortress": {"name": "모래 수송 요새", "hp": 560.0, "armor": 4.0, "speed": 0.5, "hit": 15, "price": 0.0, "boss": true, "drops": [[0.5, 0.0], "swarm", 8], "look": [5, "#E9B935"], "skill": "체력 50%·0%에서 떼거리 8명"},
+	"giant": {"name": "용광로 거인", "hp": 640.0, "armor": 5.0, "speed": 0.55, "hit": 15, "price": 0.0, "boss": true, "overheat": [8.0, 2.0, 2.0], "fireproof": true, "look": [5, "#F47A3A"], "skill": "8초마다 주변 포탑 과열"},
+	"shadow": {"name": "그림자 사령관", "hp": 720.0, "armor": 3.0, "speed": 0.65, "hit": 15, "price": 0.0, "boss": true, "clone": 0.5, "look": [5, "#8FD9B6"], "skill": "체력 50%에서 분신 소환"},
 }
 ## 테마별 전용 적과 보스 (전용 적은 앞 테마에서 통하던 전략을 하나씩 막는다)
 const THEME_FOES := [["healer"], ["sled", "shield"], ["worm", "carrier"], ["golem", "splitter"], ["phantom", "vine"]]
@@ -291,11 +293,11 @@ static func early_bonus(alive: int) -> int:
 
 
 static func wave_budget(wave: int, players: int) -> float:
-	return (20.0 + wave * 6.0) * float(budget_scale.get(clampi(players, 1, 4), 1.0))
+	return (20.0 + wave * 6.0) * float(budget_scale.get(clampi(players, 1, 4), 1.0)) * float(DIFFICULTY[difficulty][1])
 
 
 static func wave_hp(wave: int, players := 2) -> float:
-	return (1.0 + maxi(wave - 6, 0) * HP_GROWTH) * float(hp_scale.get(clampi(players, 1, 4), 1.0))
+	return (1.0 + maxi(wave - 6, 0) * HP_GROWTH) * float(hp_scale.get(clampi(players, 1, 4), 1.0)) * float(DIFFICULTY[difficulty][0])
 
 
 ## 위협 예산으로 웨이브를 만든다. 결과: [입구, 적, 수, 간격(초), 시작(초)] 묶음들.

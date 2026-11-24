@@ -6,10 +6,12 @@ var board := Board.new()
 var phase := "prep"     # prep | combat | reward | over
 var wave := 1
 var hp := GData.CASTLE_HP
-var players: Array = [] # {name, gold, ready, online, used, dmg, kills, slow, support}
-var towers: Dictionary = {}  # id -> {id, owner, type, x, y, lv, branch, spent, prio, cd}
-var enemies: Array = []      # {id, type, e, dist, hp, max, slow, slow_t}
-var draft: Dictionary = {}   # 길 미리보기 {seat, e, i, kind, side}: 누구의 제안인지 함께 보인다
+var players: Array = [] # {name, gold, mat, kit, ready, online, used, dmg, kills, slow, support, ...}
+var towers: Dictionary = {}  # id -> {id, owner, type, x, y, lv, branch, spent, prio, cd, uses, heat, fresh}
+var enemies: Array = []      # {id, type, e, dist, hp, max, slow, slow_t, shred, oil, sh, ...}
+var drafts: Dictionary = {}  # 자리 -> 길 미리보기 {e, path(평평한 배열), cost}: 그 길은 그 사람 색으로 잠긴다
+var plan: Array = []         # 이번 웨이브 구성 [입구, 적, 수, 간격, 시작]
+var seed_ := 0
 var summary: Dictionary = {} # 지난 웨이브 결과 {wave, leaks[], gold}
 var _wave_leaks: Array = []
 var cleared := false
@@ -20,37 +22,69 @@ var fx: Array = []           # 그리기용 일회성 효과
 var gate_dmg: Array = [0, 0] # 입구별 성 피해
 var leaks: Dictionary = {}   # 성에 도착한 적 종류별 수
 var speed := 1               # 전투 배속 (2배는 접속 중인 전원 동의)
+var ice_t: Dictionary = {}   # 보스가 남긴 빙판 칸 -> 남은 시간
+var undo_flags: Array = []   # 손님 사본: 자리별 되돌리기 가능 여부
 
 var _queue: Array = []
 var _can_call := false       # 손님 쪽 사본: 호스트가 알려준 일찍 부르기 가능 여부
 var is_copy := false
 var _wave_t := 0.0
 var _next_id := 1
+var _undo: Dictionary = {}   # 자리 -> 같은 준비 단계의 길 수정 기록 (호스트만)
 
 
-func _init(names: Array = []) -> void:
-	if not names.is_empty():
-		var lanes := GData.lanes_for(names.size())
-		board = Board.new(lanes)
-		gate_dmg = []
-		gate_dmg.resize(lanes)
-		gate_dmg.fill(0)
+func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
+	if names.is_empty():
+		return
+	GData.use_layout(names.size())
+	var lanes := GData.lanes_for(names.size())
+	board = Board.new(lanes)
+	gate_dmg = []
+	gate_dmg.resize(lanes)
+	gate_dmg.fill(0)
+	seed_ = seed_value if seed_value >= 0 else randi() % 1000000
 	for i in names.size():
-		var n = names[i]
-		players.append({"name": str(n), "col": i, "gold": GData.START_GOLD, "ready": false, "online": true, "used": false,
-			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0, "edits": GData.EDITS_PER_PLAYER, "fast": false, "free_up": 0, "vote": "", "call": false})
+		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kit_ok(kits[i]) else GData.DEFAULT_KIT.duplicate()
+		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
+			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
+			"fast": false, "free_up": 0, "vote": "", "call": false})
+	_make_plan()
 
 
-func team_edits() -> int:
-	var n := 0
-	for p in players:
-		n += int(p.get("edits", 0))
-	return n
+static func kit_ok(kit) -> bool:
+	if not kit is Array or (kit as Array).size() != GData.KIT_SIZE:
+		return false
+	var seen := {}
+	for t in kit:
+		if not GData.TOWERS.has(str(t)) or seen.has(str(t)):
+			return false
+		seen[str(t)] = true
+	return true
+
+
+func theme() -> int:
+	return GData.theme_of(wave)
+
+
+func cap() -> int:
+	return GData.max_path(wave)
 
 
 ## 지금 웨이브의 입구별 적 구성
 func wave_plan() -> Array:
-	return GData.wave_groups(wave, players.size())
+	return plan
+
+
+func _make_plan() -> void:
+	var weak := -1
+	if not summary.is_empty() and summary.has("leaks"):
+		var least := 1 << 30
+		for e in mini(board.paths.size(), (summary["leaks"] as Array).size()):
+			var d := int(summary["leaks"][e])
+			if d < least:
+				least = d
+				weak = e
+	plan = GData.make_wave(wave, players.size(), board.paths.size(), seed_, weak)
 
 
 func tower_cells() -> Dictionary:
@@ -58,6 +92,20 @@ func tower_cells() -> Dictionary:
 	for id in towers:
 		out[Vector2i(int(towers[id]["x"]), int(towers[id]["y"]))] = id
 	return out
+
+
+## 길을 막는 칸 (함정은 길 위에 있어도 된다)
+func blockers() -> Dictionary:
+	var out := {}
+	for id in towers:
+		var t: Dictionary = towers[id]
+		if not is_trap(t):
+			out[Vector2i(int(t["x"]), int(t["y"]))] = id
+	return out
+
+
+static func is_trap(t: Dictionary) -> bool:
+	return bool(GData.TOWERS[t["type"]]["lv"][0].get("trap", false))
 
 
 func apply(seat: int, c: Dictionary) -> String:
@@ -84,8 +132,11 @@ func apply(seat: int, c: Dictionary) -> String:
 		"move": err = _move(seat, c)
 		"sell": err = _sell(seat, c)
 		"upgrade": err = _upgrade(seat, c)
+		"repair": err = _repair(seat, c)
 		"edit": err = _edit(seat, c)
 		"draft": err = _draft(seat, c)
+		"undo": err = _undo_edit(seat)
+		"kit": err = _set_kit(seat, c)
 		"ready": return _set_ready(seat, bool(c.get("v", true)))
 		_: return "알 수 없는 요청이에요"
 	if err == "":
@@ -112,7 +163,8 @@ func _speed(seat: int, want_fast: bool) -> String:
 func can_call() -> bool:
 	if is_copy:
 		return _can_call
-	return phase == "combat" and _queue.is_empty() and not enemies.is_empty() 		and wave % GData.THEME_LEN != 0 and wave < GData.LAST_WAVE
+	return phase == "combat" and _queue.is_empty() and not enemies.is_empty() \
+		and wave % GData.THEME_LEN != 0 and wave < GData.LAST_WAVE
 
 
 func call_votes() -> int:
@@ -139,10 +191,11 @@ func _call_early() -> void:
 	var gold := GData.wave_gold(wave)
 	for p in players:
 		p["gold"] += gold + bonus
+		p["mat"] = mini(int(p["mat"]) + GData.MAT_WAVE, GData.MAT_MAX)
 		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": "", "early": bonus}
 	fx.append({"k": "early", "n": bonus})
-	wave += 1
+	_advance()
 	_start_wave()
 
 
@@ -162,12 +215,26 @@ func online_count() -> int:
 	return n
 
 
+func _set_kit(seat: int, c: Dictionary) -> String:
+	var kit = c.get("v", [])
+	if not kit_ok(kit):
+		return "포탑 %d종을 골라 주세요" % GData.KIT_SIZE
+	for id in towers:
+		if int(towers[id]["owner"]) == seat and not (kit as Array).has(towers[id]["type"]):
+			return "이미 지은 포탑은 공구함에서 뺄 수 없어요"
+	players[seat]["kit"] = (kit as Array).duplicate()
+	return ""
+
+
 func _build(seat: int, c: Dictionary) -> String:
 	var type := str(c.get("type", ""))
 	if not GData.TOWERS.has(type):
 		return "없는 포탑이에요"
+	if not (players[seat]["kit"] as Array).has(type):
+		return "공구함에 없는 포탑이에요"
 	var cell := Vector2i(int(c.get("x", -1)), int(c.get("y", -1)))
-	var err := board.can_build(cell, tower_cells())
+	var trap: bool = GData.TOWERS[type]["lv"][0].get("trap", false)
+	var err := board.can_build(cell, tower_cells(), theme(), trap)
 	if err != "":
 		return err
 	var cost: int = GData.TOWERS[type]["cost"]
@@ -176,8 +243,9 @@ func _build(seat: int, c: Dictionary) -> String:
 	players[seat]["gold"] -= cost
 	var id := _next_id
 	_next_id += 1
+	var s := GData.tower_stats(type, 1, "")
 	towers[id] = {"id": id, "owner": seat, "type": type, "x": cell.x, "y": cell.y, "lv": 1, "branch": "",
-		"spent": cost, "prio": "first", "cd": 0.0}
+		"spent": cost, "prio": "strong" if type == "sniper" else "first", "cd": 0.0, "uses": int(s["uses"]), "heat": 0.0, "fresh": true}
 	return ""
 
 
@@ -193,7 +261,9 @@ func _move(seat: int, c: Dictionary) -> String:
 	if t.is_empty():
 		return "내 포탑만 옮길 수 있어요"
 	var cell := Vector2i(int(c.get("x", -1)), int(c.get("y", -1)))
-	var err := board.can_build(cell, tower_cells())
+	var cells := tower_cells()
+	cells.erase(Vector2i(int(t["x"]), int(t["y"])))
+	var err := board.can_build(cell, cells, theme(), is_trap(t))
 	if err != "":
 		return err
 	t["x"] = cell.x
@@ -201,13 +271,18 @@ func _move(seat: int, c: Dictionary) -> String:
 	return ""
 
 
+## 판매: 같은 준비 단계에 지은 포탑은 전액 환불 (실수 되돌리기)
 func _sell(seat: int, c: Dictionary) -> String:
 	var t := _mine(seat, c)
 	if t.is_empty():
 		return "내 포탑만 팔 수 있어요"
-	players[seat]["gold"] += int(floor(int(t["spent"]) * GData.SELL_RATE))
+	players[seat]["gold"] += sell_value(t)
 	towers.erase(int(t["id"]))
 	return ""
+
+
+func sell_value(t: Dictionary) -> int:
+	return int(t["spent"]) if bool(t.get("fresh", false)) else int(floor(int(t["spent"]) * GData.SELL_RATE))
 
 
 func _upgrade(seat: int, c: Dictionary) -> String:
@@ -231,6 +306,22 @@ func _upgrade(seat: int, c: Dictionary) -> String:
 	t["lv"] = lv + 1
 	if lv == 2:
 		t["branch"] = branch
+	if is_trap(t):
+		t["uses"] = int(GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["uses"])
+	return ""
+
+
+func _repair(seat: int, c: Dictionary) -> String:
+	var t := _mine(seat, c)
+	if t.is_empty() or not is_trap(t):
+		return "내 함정만 고칠 수 있어요"
+	var full := int(GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["uses"])
+	if int(t["uses"]) >= full:
+		return "고칠 데가 없어요"
+	if int(players[seat]["mat"]) < GData.TRAP_REPAIR:
+		return "공사 자재가 부족해요"
+	players[seat]["mat"] = int(players[seat]["mat"]) - GData.TRAP_REPAIR
+	t["uses"] = full
 	return ""
 
 
@@ -246,29 +337,131 @@ func _prio(seat: int, c: Dictionary) -> String:
 	return ""
 
 
-func _edit(seat: int, c: Dictionary) -> String:
-	if int(players[seat].get("edits", 0)) <= 0:
-		return "이번 테마의 내 길 개조 기회를 다 썼어요"
-	var r := board.reroute(int(c.get("e", -1)), int(c.get("i", -1)), str(c.get("kind", "")), int(c.get("side", 0)), tower_cells())
+## 다시 그린 길을 검사한다. 내 포탑이 막으면 옆 칸으로 옮길 자리를 같이 찾는다.
+## 결과 {path, cost, moves:[[id, x, y]]} 또는 {err}
+func check_route(seat: int, e: int, path: Array) -> Dictionary:
+	if e < 0 or e >= board.paths.size():
+		return {"err": "없는 길이에요"}
+	for s in drafts:
+		if int(s) != seat and int(drafts[s]["e"]) == e:
+			return {"err": "%s 님이 이 길을 그리는 중이에요 · 핑으로 의견을 보내 주세요" % players[int(s)]["name"]}
+	var blk := blockers()
+	var moves: Array = []
+	var taken := {}
+	for c in path:
+		if not blk.has(c) or board.paths[e].has(c):
+			continue
+		var t: Dictionary = towers[blk[c]]
+		if int(t["owner"]) != seat:
+			return {"err": "%s 님 포탑이 막고 있어요 · 옮겨 달라고 핑을 보내 보세요" % players[int(t["owner"])]["name"]}
+		var spot := _free_beside(c, path, taken)
+		if spot.x < 0:
+			return {"err": "막고 있는 내 포탑을 옮길 빈칸이 없어요"}
+		taken[spot] = true
+		moves.append([t["id"], spot.x, spot.y])
+		blk.erase(c)
+	var err := board.validate(e, path, blk, theme(), cap())
+	if err != "":
+		return {"err": err}
+	return {"path": path, "cost": board.cost_of(e, path, theme()), "moves": moves}
+
+
+func _free_beside(c: Vector2i, path: Array, taken: Dictionary) -> Vector2i:
+	var cells := tower_cells()
+	for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN, Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+		var n: Vector2i = c + d
+		if taken.has(n) or path.has(n):
+			continue
+		if board.can_build(n, cells, theme()) == "":
+			return n
+	return Vector2i(-1, -1)
+
+
+static func _path_arg(c: Dictionary) -> Array:
+	var raw = c.get("path", [])
+	if not raw is Array:
+		return []
+	return Board.unflat(raw)
+
+
+## 미리보기: 길의 두 점 사이를 새로 그린 경로. 그 길은 확정·취소 전까지 내 색으로 잠긴다.
+func _draft(seat: int, c: Dictionary) -> String:
+	if not c.has("e"):
+		drafts.erase(seat)
+		return ""
+	var e := int(c.get("e", -1))
+	var r := check_route(seat, e, _path_arg(c))
 	if r.has("err"):
 		return str(r["err"])
-	board.paths[int(c["e"])] = r["path"]
-	players[seat]["edits"] = int(players[seat]["edits"]) - 1
-	draft = {}
+	drafts[seat] = {"e": e, "path": Board.flat(r["path"]), "cost": int(r["cost"]), "moves": r["moves"]}
+	return ""
+
+
+## 확정: 늘어난 칸만큼 자재를 쓰고, 줄이면 돌려받는다. 같은 준비 단계 안에서는 되돌릴 수 있다.
+func _edit(seat: int, c: Dictionary) -> String:
+	var e := int(c.get("e", -1))
+	var path := _path_arg(c)
+	if path.is_empty() and drafts.has(seat):
+		e = int(drafts[seat]["e"])
+		path = Board.unflat(drafts[seat]["path"])
+	if path.is_empty():
+		return "먼저 길을 그려 주세요"
+	for s in drafts.keys():      # 동료의 제안을 내 자재로 확정할 수 있다
+		if int(s) != seat and int(drafts[s]["e"]) == e and drafts[s]["path"] == Board.flat(path):
+			drafts.erase(s)
+	var r := check_route(seat, e, path)
+	if r.has("err"):
+		return str(r["err"])
+	var cost := int(r["cost"])
+	if cost > int(players[seat]["mat"]):
+		return "공사 자재가 부족해요 (%d 필요)" % cost
+	var back := []
+	for mv in r["moves"]:
+		var t: Dictionary = towers[int(mv[0])]
+		back.append([t["id"], t["x"], t["y"]])
+		t["x"] = int(mv[1])
+		t["y"] = int(mv[2])
+	if not _undo.has(seat):
+		_undo[seat] = []
+	_undo[seat].append({"e": e, "old": board.paths[e], "cost": cost, "moves": back})
+	board.paths[e] = r["path"]
+	players[seat]["mat"] = clampi(int(players[seat]["mat"]) - cost, 0, GData.MAT_MAX)
+	drafts.erase(seat)
 	for p in players:
 		p["ready"] = false
 	return ""
 
 
-func _draft(seat: int, c: Dictionary) -> String:
-	if not c.has("e"):
-		draft = {}
-		return ""
-	var r := board.reroute(int(c.get("e", -1)), int(c.get("i", -1)), str(c.get("kind", "")), int(c.get("side", 0)), tower_cells())
-	if r.has("err"):
-		return str(r["err"])
-	draft = {"seat": seat, "e": int(c["e"]), "i": int(c["i"]), "kind": str(c["kind"]), "side": int(c["side"])}
+func can_undo(seat: int) -> bool:
+	return _undo.has(seat) and not (_undo[seat] as Array).is_empty()
+
+
+func _undo_edit(seat: int) -> String:
+	if not can_undo(seat):
+		return "되돌릴 길 수정이 없어요"
+	var u: Dictionary = _undo[seat].pop_back()
+	var e := int(u["e"])
+	var blk := blockers()
+	for mv in u["moves"]:
+		if towers.has(int(mv[0])):
+			var t: Dictionary = towers[int(mv[0])]
+			blk.erase(Vector2i(int(t["x"]), int(t["y"])))
+	if board.validate(e, u["old"], blk, theme(), 999) != "":
+		_undo[seat].append(u)
+		return "그사이 바뀐 것이 있어 되돌릴 수 없어요"
+	board.paths[e] = u["old"]
+	for mv in u["moves"]:
+		if towers.has(int(mv[0])):
+			towers[int(mv[0])]["x"] = int(mv[1])
+			towers[int(mv[0])]["y"] = int(mv[2])
+	players[seat]["mat"] = clampi(int(players[seat]["mat"]) + int(u["cost"]), 0, GData.MAT_MAX)
 	return ""
+
+
+func undo_ready(seat: int) -> bool:
+	if not is_copy:
+		return can_undo(seat)
+	return seat < undo_flags.size() and bool(undo_flags[seat])
 
 
 ## 테마 보스를 넘기면 팀 보상을 투표로 고른다. 동점이면 목록 순서가 앞선 것.
@@ -339,12 +532,13 @@ func _ability(seat: int, c: Dictionary) -> String:
 
 func _start_wave() -> void:
 	phase = "combat"
-	draft = {}
+	drafts = {}
+	_undo = {}
 	_wave_t = 0.0
 	_queue = []
-	for g in wave_plan():
+	for g in plan:
 		for n in int(g[2]):
-			_queue.append({"t": float(g[4]) + n * float(g[3]), "e": int(g[0]), "type": str(g[1])})
+			_queue.append({"t": float(g[4]) + n * float(g[3]), "e": mini(int(g[0]), board.paths.size() - 1), "type": str(g[1])})
 	_queue.sort_custom(func(a, b): return a["t"] < b["t"])
 	_wave_leaks = []
 	_wave_leaks.resize(board.paths.size())
@@ -353,7 +547,19 @@ func _start_wave() -> void:
 		p["ready"] = false
 		p["used"] = false
 		p["call"] = false
+	for id in towers:
+		towers[id]["fresh"] = false
 	version += 1
+
+
+func _spawn(type: String, e: int, dist := 0.0, hp_ratio := 1.0) -> Dictionary:
+	var d: Dictionary = GData.ENEMIES[type]
+	var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size())
+	var en := {"id": _next_id, "type": type, "e": e, "dist": dist, "hp": max_hp * hp_ratio, "max": max_hp * hp_ratio,
+		"slow": 0.0, "slow_t": 0.0, "shred": 0.0, "shred_t": 0.0, "oil": 0.0, "sh": 0.0, "cell": -1, "sk": 0.0, "done": []}
+	_next_id += 1
+	enemies.append(en)
+	return en
 
 
 func step(dt := GData.TICK) -> void:
@@ -363,53 +569,129 @@ func step(dt := GData.TICK) -> void:
 	_wave_t += dt
 	while not _queue.is_empty() and _queue[0]["t"] <= _wave_t and enemies.size() < GData.MAX_ALIVE:
 		var q: Dictionary = _queue.pop_front()
-		var d: Dictionary = GData.ENEMIES[q["type"]]
-		var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size())
-		enemies.append({"id": _next_id, "type": q["type"], "e": q["e"], "dist": 0.0, "hp": max_hp, "max": max_hp,
-			"slow": 0.0, "slow_t": 0.0, "shred": 0.0, "shred_t": 0.0})
-		_next_id += 1
+		_spawn(q["type"], q["e"])
+	for k in ice_t.keys():
+		ice_t[k] = float(ice_t[k]) - dt
+		if float(ice_t[k]) <= 0.0:
+			ice_t.erase(k)
 	_move_enemies(dt)
 	if phase == "over":
 		return
+	_enemy_skills(dt)
 	_fire(dt)
 	if _queue.is_empty() and enemies.is_empty():
 		_finish_wave()
 
 
+func on_ice(c: Vector2i) -> bool:
+	return ice_t.has(c) or (GData.pond_state(theme()) == "ice" and GData.is_pond(c))
+
+
+func on_lava(c: Vector2i) -> bool:
+	return theme() >= 3 and GData.CRACKS.has(c)
+
+
 func _move_enemies(dt: float) -> void:
-	for idx in range(enemies.size() - 1, -1, -1):
-		var en: Dictionary = enemies[idx]
-		if en["slow_t"] > 0.0:
-			en["slow_t"] -= dt
-			if en["slow_t"] <= 0.0:
-				en["slow"] = 0.0
-		if float(en.get("shred_t", 0.0)) > 0.0:
-			en["shred_t"] = float(en["shred_t"]) - dt
-			if en["shred_t"] <= 0.0:
-				en["shred"] = 0.0
+	for en in enemies.duplicate():
+		if not enemies.has(en):
+			continue
+		for k in ["slow", "shred"]:
+			var tk: String = k + "_t"
+			if float(en[tk]) > 0.0:
+				en[tk] = float(en[tk]) - dt
+				if float(en[tk]) <= 0.0:
+					en[k] = 0.0
+		en["oil"] = maxf(float(en["oil"]) - dt, 0.0)
 		var d: Dictionary = GData.ENEMIES[en["type"]]
-		var zone := _zone()
-		var cell := Vector2i(_pos(en))
-		var boost := GData.ICE_SPEED if zone == "ice" and _in_zones(cell, GData.ice_zones(board.paths.size())) else 1.0
-		en["dist"] += float(d["speed"]) * boost * (1.0 - float(en["slow"])) * dt
-		if zone == "lava" and _in_zones(cell, GData.lava_zones(board.paths.size())):
+		var path: Array = board.paths[en["e"]]
+		var ci := clampi(int(float(en["dist"]) + 0.5), 0, path.size() - 1)
+		var cell: Vector2i = path[ci]
+		var boost := 1.0
+		if on_ice(cell):
+			boost = float(d.get("ice", GData.ICE_SPEED))
+		var slow := float(en["slow"]) * (1.0 - float(d.get("slow_res", 0.0)))
+		en["dist"] += float(d["speed"]) * boost * (1.0 - slow) * dt
+		if on_lava(cell) and not bool(d.get("fireproof", false)):
 			en["hp"] = float(en["hp"]) - float(en["max"]) * GData.LAVA_RATE * dt
 			if float(en["hp"]) <= 0.0:
-				enemies.remove_at(idx)
+				_die(en, -1)
 				continue
-		if en["dist"] >= board.paths[en["e"]].size() - 1 + 0.6:
+		if ci != int(en["cell"]):        # 새 칸에 들어섰다: 함정·빙판 자국
+			en["cell"] = ci
+			if float(d.get("trail", 0.0)) > 0.0:
+				ice_t[cell] = float(d["trail"])
+			_trap(en, cell)
+			if not enemies.has(en):
+				continue
+		if en["dist"] >= path.size() - 1 + 0.6:
 			hp -= int(d["hit"])
 			gate_dmg[int(en["e"])] += int(d["hit"])
 			if int(en["e"]) < _wave_leaks.size():
 				_wave_leaks[int(en["e"])] += 1
 			leaks[en["type"]] = int(leaks.get(en["type"], 0)) + 1
 			fx.append({"k": "hit", "n": int(d["hit"]), "e": int(en["e"])})
-			enemies.remove_at(idx)
+			enemies.erase(en)
 			version += 1
 			if hp <= 0:
 				hp = 0
 				_lose()
 				return
+
+
+func _trap(en: Dictionary, cell: Vector2i) -> void:
+	for id in towers:
+		var t: Dictionary = towers[id]
+		if int(t["x"]) != cell.x or int(t["y"]) != cell.y or not is_trap(t) or int(t["uses"]) <= 0:
+			continue
+		var s := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
+		t["uses"] = int(t["uses"]) - 1
+		if int(t["uses"]) <= 0:
+			version += 1
+		fx.append({"k": "shot", "ty": t["type"], "x": cell.x + 0.5, "y": cell.y + 0.5, "tx": cell.x + 0.5, "ty2": cell.y + 0.5, "r": 0.5})
+		_hurt(en, s, int(t["owner"]), true)
+		return
+
+
+## 적 능력: 회복, 보호막, 보스 기술
+func _enemy_skills(dt: float) -> void:
+	for en in enemies.duplicate():
+		if not enemies.has(en):
+			continue
+		var d: Dictionary = GData.ENEMIES[en["type"]]
+		var at := _pos(en)
+		if float(d.get("heal", 0.0)) > 0.0:
+			for o in enemies:
+				if o != en and _pos(o).distance_to(at) <= float(d["heal_r"]):
+					o["hp"] = minf(float(o["max"]), float(o["hp"]) + float(d["heal"]) * GData.hp_mul * dt)
+		if float(d.get("guard", 0.0)) > 0.0:
+			for o in enemies:
+				if o != en and _pos(o).distance_to(at) <= 2.0:
+					o["sh"] = minf(float(d["guard"]) * GData.hp_mul, float(o["sh"]) + 10.0 * GData.hp_mul * dt)
+		if d.has("overheat"):
+			en["sk"] = float(en["sk"]) + dt
+			var oh: Array = d["overheat"]
+			if float(en["sk"]) >= float(oh[0]):
+				en["sk"] = 0.0
+				for id in towers:
+					var t: Dictionary = towers[id]
+					if (Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(oh[1]):
+						t["heat"] = float(oh[2])
+				fx.append({"k": "heat", "x": at.x, "y": at.y, "r": float(oh[1])})
+		if d.has("clone") and not (en["done"] as Array).has("clone") and not bool(en.get("cl", false)) \
+				and float(en["hp"]) <= float(en["max"]) * float(d["clone"]):
+			en["done"].append("clone")
+			var lane := board.paths.size() - 1
+			var c := _spawn(en["type"], lane, 0.0, 0.35)
+			c["cl"] = true
+			fx.append({"k": "spawn", "e": lane})
+		if d.has("drops"):
+			var dr: Array = d["drops"]
+			for r in dr[0]:
+				var key := "drop%s" % r
+				if float(r) > 0.0 and not (en["done"] as Array).has(key) and float(en["hp"]) <= float(en["max"]) * float(r):
+					en["done"].append(key)
+					for i in int(dr[2]):
+						_spawn(str(dr[1]), int(en["e"]), maxf(float(en["dist"]) - 0.08 * i, 0.0))
 
 
 func _lose() -> void:
@@ -427,10 +709,15 @@ func _pos(en: Dictionary) -> Vector2:
 func _fire(dt: float) -> void:
 	for id in towers:
 		var t: Dictionary = towers[id]
+		if float(t.get("heat", 0.0)) > 0.0:
+			t["heat"] = float(t["heat"]) - dt
+			continue
 		t["cd"] = float(t["cd"]) - dt
 		if t["cd"] > 0.0:
 			continue
 		var s := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
+		if bool(s["support"]) or bool(s["trap"]):
+			continue
 		s["range"] = tower_range(t)
 		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
 		var target := _pick(at, float(s["range"]), str(t["prio"]))
@@ -442,7 +729,7 @@ func _fire(dt: float) -> void:
 		if bool(s["aura"]):      # 범위 안 전부
 			fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": at.x, "ty2": at.y, "r": s["range"]})
 			for en in enemies.duplicate():
-				if _pos(en).distance_to(at) <= float(s["range"]):
+				if enemies.has(en) and _pos(en).distance_to(at) <= float(s["range"]):
 					_hurt(en, s, owner)
 			continue
 		if bool(s["line"]):      # 사거리 끝까지 일직선 관통
@@ -452,13 +739,37 @@ func _fire(dt: float) -> void:
 			for en in enemies.duplicate():
 				var rel := _pos(en) - at
 				var along := rel.dot(dir)
-				if en == target or (along >= 0.0 and along <= float(s["range"]) and absf(rel.cross(dir)) <= 0.45):
+				if enemies.has(en) and (en == target or (along >= 0.0 and along <= float(s["range"]) and absf(rel.cross(dir)) <= 0.45)):
+					_hurt(en, s, owner)
+			continue
+		if int(s["chain"]) > 0:      # 연쇄 번개: 가까운 적으로 튄다
+			var hit := [target]
+			var from := hit_at
+			fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": from.x, "ty2": from.y, "r": 0.0})
+			for _n in int(s["chain"]) - 1:
+				var nxt := {}
+				var best := float(s["jump"])
+				for en in enemies:
+					if hit.has(en) or is_hidden(en):
+						continue
+					var dd := _pos(en).distance_to(from)
+					if dd <= best:
+						best = dd
+						nxt = en
+				if nxt.is_empty():
+					break
+				var to := _pos(nxt)
+				fx.append({"k": "shot", "ty": t["type"], "x": from.x, "y": from.y, "tx": to.x, "ty2": to.y, "r": 0.0})
+				hit.append(nxt)
+				from = to
+			for en in hit:
+				if enemies.has(en):
 					_hurt(en, s, owner)
 			continue
 		fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": hit_at.x, "ty2": hit_at.y, "r": s["splash"]})
 		if float(s["splash"]) > 0.0:
 			for en in enemies.duplicate():
-				if _pos(en).distance_to(hit_at) <= float(s["splash"]):
+				if enemies.has(en) and _pos(en).distance_to(hit_at) <= float(s["splash"]):
 					_hurt(en, s, owner)
 		else:
 			_hurt(target, s, owner)
@@ -468,7 +779,7 @@ func _pick(at: Vector2, radius: float, prio: String) -> Dictionary:
 	var best := {}
 	var best_v := -INF
 	for en in enemies:
-		if is_ghost(en) or _pos(en).distance_to(at) > radius:
+		if is_hidden(en) or _pos(en).distance_to(at) > radius:
 			continue
 		var v := 0.0
 		match prio:
@@ -482,45 +793,103 @@ func _pick(at: Vector2, radius: float, prio: String) -> Dictionary:
 
 
 func _zone() -> String:
-	return str(GData.THEMES[GData.theme_of(wave)]["zone"])
+	return str(GData.THEMES[theme()]["zone"])
 
 
-func _in_zones(cell: Vector2i, zones: Array) -> bool:
-	for r in zones:
-		if r.has_point(cell):
+## 이번 웨이브 모래바람 중심 (준비 단계에 공개, 웨이브마다 자리가 바뀜)
+func sand_spot() -> Vector2:
+	if theme() != 2 or GData.SAND_SPOTS.is_empty():
+		return Vector2(-99, -99)
+	return GData.SAND_SPOTS[absi(hash([seed_, wave])) % GData.SAND_SPOTS.size()]
+
+
+func _signals() -> Array:
+	var out := []
+	for id in towers:
+		var t: Dictionary = towers[id]
+		if t["type"] == "signal" and float(t.get("heat", 0.0)) <= 0.0:
+			out.append(t)
+	return out
+
+
+## 환경·신호탑까지 반영한 사거리
+func tower_range(t: Dictionary) -> float:
+	var r: float = GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["range"]
+	var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
+	if t["type"] != "signal" and not is_trap(t):
+		var buff := 0.0
+		for sg in _signals():
+			var ss := GData.tower_stats("signal", int(sg["lv"]), str(sg["branch"]))
+			if (Vector2(int(sg["x"]), int(sg["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]) + 0.01:
+				buff = maxf(buff, float(ss["buff"]))
+		r *= 1.0 + buff
+	if at.distance_to(sand_spot()) <= GData.SAND_RADIUS:
+		r *= GData.SAND_RANGE
+	return r
+
+
+func _revealed(at: Vector2) -> bool:
+	for sg in _signals():
+		var ss := GData.tower_stats("signal", int(sg["lv"]), str(sg["branch"]))
+		if (Vector2(int(sg["x"]), int(sg["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]):
 			return true
 	return false
 
 
-## 환경까지 반영한 사거리
-func tower_range(t: Dictionary) -> float:
-	var r: float = GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["range"]
-	if _zone() == "sand":
-		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
-		if at.distance_to(GData.SAND_CENTER) <= GData.SAND_RADIUS:
-			r *= GData.SAND_RANGE
-	return r
+func _marked(at: Vector2) -> float:
+	var m := 0.0
+	for sg in _signals():
+		var ss := GData.tower_stats("signal", int(sg["lv"]), str(sg["branch"]))
+		if float(ss["mark"]) > 0.0 and (Vector2(int(sg["x"]), int(sg["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]):
+			m = maxf(m, float(ss["mark"]))
+	return m
 
 
-## 유령 숲: 적 셋 중 하나가 주기적으로 조준 불가. 길을 따라 움직이고 성에 닿으면 피해를 준다.
-func is_ghost(en: Dictionary) -> bool:
-	if _zone() != "ghost":
-		return false
+## 조준할 수 없는 상태: 유령병(신호탑 근처면 실체화), 땅속의 굴착 벌레
+func is_hidden(en: Dictionary) -> bool:
 	if en.has("gh"):
 		return bool(en["gh"])
+	var d: Dictionary = GData.ENEMIES[en["type"]]
 	var id := int(en["id"])
-	return id % 3 == 0 and fmod(time + id * 0.37, GData.GHOST_CYCLE) < GData.GHOST_TIME
+	if d.has("phase"):
+		var ph: Array = d["phase"]
+		if fmod(time + id * 0.37, float(ph[0])) < float(ph[1]):
+			return not _revealed(_pos(en))
+	if d.has("burrow"):
+		var bw: Array = d["burrow"]
+		return fmod(time + id * 0.53, float(bw[0])) < float(bw[1])
+	return false
 
 
-func _hurt(en: Dictionary, s: Dictionary, owner: int) -> void:
-	if is_ghost(en):
+func is_ghost(en: Dictionary) -> bool:
+	return is_hidden(en)
+
+
+func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false) -> void:
+	if not from_trap and is_hidden(en):
 		return
+	var d: Dictionary = GData.ENEMIES[en["type"]]
+	if float(s.get("oil", 0.0)) > 0.0:
+		en["oil"] = maxf(float(en["oil"]), float(s["oil"]))
 	if float(s.get("shred", 0.0)) > 0.0:      # 자석탑: 방어력을 잠시 깎는다 (겹치면 큰 쪽)
 		en["shred"] = maxf(float(en.get("shred", 0.0)), float(s["shred"]))
 		en["shred_t"] = 3.0
-	var base_armor: float = float(GData.ENEMIES[en["type"]]["armor"]) * (1.0 - float(en.get("shred", 0.0)))
+	var raw := float(s["dmg"])
+	if bool(s.get("fire", false)):
+		if bool(d.get("fireproof", false)):
+			raw = 0.0
+		elif float(en["oil"]) > 0.0:
+			raw *= 3.0
+	if int(s.get("chain", 0)) > 0 and float(en["slow"]) > 0.0:
+		raw *= 2.0
+	raw *= 1.0 + _marked(_pos(en))
+	var base_armor: float = float(d["armor"]) * (1.0 - float(en.get("shred", 0.0)))
 	var armor: float = maxf(base_armor - float(s["pierce"]), 0.0)
-	var dmg: float = maxf(float(s["dmg"]) - armor, float(s["dmg"]) * 0.25)
+	var dmg: float = maxf(raw - armor, raw * 0.25) if raw > 0.0 else 0.0
+	if float(en["sh"]) > 0.0 and dmg > 0.0:      # 수송차 보호막이 먼저 막는다
+		var absorbed := minf(float(en["sh"]), dmg)
+		en["sh"] = float(en["sh"]) - absorbed
+		dmg -= absorbed
 	dmg = minf(dmg, float(en["hp"]))
 	en["hp"] = float(en["hp"]) - dmg
 	players[owner]["dmg"] += dmg
@@ -530,10 +899,27 @@ func _hurt(en: Dictionary, s: Dictionary, owner: int) -> void:
 	if float(s["slow"]) > 0.0:
 		_chill(en, float(s["slow"]), 1.4, owner)
 	if float(en["hp"]) <= 0.0:
+		_die(en, owner)
+
+
+func _die(en: Dictionary, owner: int) -> void:
+	if not enemies.has(en):
+		return
+	var d: Dictionary = GData.ENEMIES[en["type"]]
+	if owner >= 0:
 		players[owner]["kills"] += 1
-		var at := _pos(en)
-		fx.append({"k": "kill", "x": at.x, "y": at.y, "big": en["type"] == "heavy" or en["type"] == "boss"})
-		enemies.erase(en)
+	var at := _pos(en)
+	fx.append({"k": "kill", "x": at.x, "y": at.y, "big": en["type"] == "heavy" or GData.is_boss(en["type"])})
+	enemies.erase(en)
+	if d.has("split"):
+		var sp: Array = d["split"]
+		for i in int(sp[1]):
+			_spawn(str(sp[0]), int(en["e"]), maxf(float(en["dist"]) - 0.3 * i, 0.0))
+	if d.has("drops"):
+		var dr: Array = d["drops"]
+		if (dr[0] as Array).has(0.0):
+			for i in int(dr[2]):
+				_spawn(str(dr[1]), int(en["e"]), maxf(float(en["dist"]) - 0.08 * i, 0.0))
 
 
 func _chill(en: Dictionary, amount: float, dur: float, owner: int) -> void:
@@ -547,6 +933,7 @@ func _finish_wave() -> void:
 	var gold := GData.wave_gold(wave)
 	for p in players:
 		p["gold"] += gold
+		p["mat"] = mini(int(p["mat"]) + GData.MAT_WAVE, GData.MAT_MAX)
 		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
 	if wave >= GData.LAST_WAVE:
@@ -557,11 +944,21 @@ func _finish_wave() -> void:
 	var boss := wave % GData.THEME_LEN == 0
 	if boss:
 		for p in players:
-			p["edits"] = GData.EDITS_PER_PLAYER
 			p["vote"] = ""
-	wave += 1
+	_advance()
 	phase = "reward" if boss else "prep"
 	version += 1
+
+
+## 다음 웨이브로: 테마가 바뀌면 지형 사건, 구성 새로 만들기
+func _advance() -> void:
+	wave += 1
+	if theme() == 4 and not board.opened:      # 유령 숲: 막힌 땅이 열리며 새 입구
+		board.opened = true
+		board.paths.append(GData.EXTRA_PATH.duplicate())
+		gate_dmg.append(0)
+		fx.append({"k": "open", "e": board.paths.size() - 1})
+	_make_plan()
 
 
 func next_online(from: int) -> int:
@@ -576,8 +973,7 @@ func set_online(seat: int, on: bool) -> void:
 	players[seat]["online"] = on
 	if not on:
 		players[seat]["ready"] = false
-		if int(draft.get("seat", -1)) == seat:
-			draft = {}
+		drafts.erase(seat)
 	version += 1
 	if not on and phase == "prep":
 		var all_ready := false
@@ -594,9 +990,25 @@ func to_data() -> Dictionary:
 	var ts := []
 	for id in towers:
 		var t: Dictionary = towers[id]
-		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"]])
-	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": draft, "sm": summary,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size()}
+		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"],
+			int(t.get("uses", 0)), snappedf(float(t.get("heat", 0.0)), 0.1), bool(t.get("fresh", false))])
+	var dr := {}
+	for s in drafts:
+		dr[str(s)] = drafts[s]
+	var undo := []
+	for s in players.size():
+		undo.append(can_undo(s))
+	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "gd": gate_dmg,
+		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data()}
+
+
+func _ice_data() -> Array:
+	var out := []
+	for c in ice_t:
+		out.append(c.x)
+		out.append(c.y)
+	return out
 
 
 func load_data(d: Dictionary) -> void:
@@ -604,22 +1016,33 @@ func load_data(d: Dictionary) -> void:
 	phase = str(d["ph"])
 	wave = int(d["w"])
 	hp = int(d["hp"])
-	players = d["pl"]
+	var pl: Array = d["pl"]
+	if GData.LAYOUT != ("v4" if pl.size() >= 3 else "v2"):
+		GData.use_layout(pl.size())
+	players = pl
 	for p in players:
 		p["gold"] = int(p["gold"])
+		p["mat"] = int(p.get("mat", 0))
 		p["col"] = int(p.get("col", 0))
 		p["kills"] = int(p["kills"])
 		p["support"] = int(p["support"])
-		p["edits"] = int(p.get("edits", 0))
 		p["free_up"] = int(p.get("free_up", 0))
+		var kit: Array = []
+		for t in p.get("kit", GData.DEFAULT_KIT):
+			kit.append(str(t))
+		p["kit"] = kit
 	towers = {}
 	for r in d["tw"]:
 		towers[int(r[0])] = {"id": int(r[0]), "owner": int(r[1]), "type": str(r[2]), "x": int(r[3]), "y": int(r[4]),
-			"lv": int(r[5]), "branch": str(r[6]), "spent": int(r[7]), "prio": str(r[8]), "cd": 0.0}
-	draft = {}
-	var dr: Dictionary = d["dr"]
-	if not dr.is_empty():
-		draft = {"seat": int(dr.get("seat", -1)), "e": int(dr["e"]), "i": int(dr["i"]), "kind": str(dr["kind"]), "side": int(dr["side"])}
+			"lv": int(r[5]), "branch": str(r[6]), "spent": int(r[7]), "prio": str(r[8]), "cd": 0.0,
+			"uses": int(r[9]) if r.size() > 9 else 0, "heat": float(r[10]) if r.size() > 10 else 0.0, "fresh": bool(r[11]) if r.size() > 11 else false}
+	drafts = {}
+	var dr: Dictionary = d.get("dr", {})
+	for s in dr:
+		var v: Dictionary = dr[s]
+		drafts[int(s)] = {"e": int(v["e"]), "path": v["path"], "cost": int(v["cost"]), "moves": v.get("moves", [])}
+	plan = d.get("wp", [])
+	seed_ = int(d.get("sd", 0))
 	summary = d.get("sm", {})
 	if summary.has("wave"):
 		summary["wave"] = int(summary["wave"])
@@ -628,18 +1051,25 @@ func load_data(d: Dictionary) -> void:
 	time = float(d["tm"])
 	version = int(d["v"])
 	board.load_data(d["pa"])
+	board.opened = bool(d.get("op", false))
 	gate_dmg = []
 	for v in d["gd"]:
 		gate_dmg.append(int(v))
 	leaks = d["lk"]
 	speed = int(d.get("sp", 1))
 	_can_call = bool(d.get("cc", false))
+	undo_flags = d.get("un", [])
+	ice_t = {}
+	var it: Array = d.get("it", [])
+	for k in range(0, it.size() - 1, 2):
+		ice_t[Vector2i(int(it[k]), int(it[k + 1]))] = 1.0
 
 
 func enemies_data() -> Array:
 	var out := []
 	for en in enemies:
-		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), en["max"], snappedf(en["slow"], 0.01), is_ghost(en), snappedf(float(en.get("shred", 0.0)), 0.01)])
+		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), roundi(en["max"]), snappedf(en["slow"], 0.01),
+			is_hidden(en), snappedf(float(en.get("shred", 0.0)), 0.01), float(en.get("oil", 0.0)) > 0.0, roundi(float(en.get("sh", 0.0))), snappedf(float(en.get("sk", 0.0)), 0.1)])
 	return out
 
 
@@ -647,4 +1077,6 @@ func load_enemies(rows: Array) -> void:
 	enemies = []
 	for r in rows:
 		enemies.append({"id": int(r[0]), "type": str(r[1]), "e": int(r[2]), "dist": float(r[3]), "hp": float(r[4]),
-			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "shred": float(r[8]) if r.size() > 8 else 0.0, "shred_t": 0.0})
+			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "shred": float(r[8]) if r.size() > 8 else 0.0, "shred_t": 0.0,
+			"oil": 1.0 if r.size() > 9 and bool(r[9]) else 0.0, "sh": float(r[10]) if r.size() > 10 else 0.0, "sk": float(r[11]) if r.size() > 11 else 0.0,
+			"cell": -1, "done": []})

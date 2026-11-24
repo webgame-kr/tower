@@ -11,8 +11,8 @@ const TEX_ICONS := preload("res://art/icons.png")
 
 const STAGE := Vector2(1280, 720)
 const FRAME := Rect2(0, 0, 1280, 720)     # 지형이 깔리는 화면 전체
-const MAP := Vector2(262, 100)            # 플레이 칸의 시작점
-const CELL := 28.0
+var MAP := Vector2(262, 110)              # 플레이 칸의 시작점 (맵 배치에 따라 GData 가 정한다)
+var CELL := 36.0
 const MINI_VIEW := Rect2(190, 60, 900, 600)   # 작은 지도에 보여 줄 범위
 const TRANSITION := 2.5
 
@@ -44,10 +44,9 @@ const CFG_DEFAULT := {"font": 100, "fx_low": false, "thick": false, "shake": 30,
 const OWNER := [Color("E0533D"), Color("3D6FD1"), Color("E9B935"), Color("38A672")]
 const OWNER_TEXT := [Color("FF8A78"), Color("7FA6F0"), Color("E9B935"), Color("5FCB97")]
 const MARK := ["●", "▲", "■", "◆"]
-const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "oil": 3, "flame": 4, "magnet": 5}
-const LOCKED := [["oil", "기름분사탑"], ["flame", "불꽃탑"], ["magnet", "자석탑"]]
-const ENEMY_COL := {"grunt": 0, "swarm": 1, "heavy": 2, "rusher": 3, "boss": 5}
-const ENEMY_SIZE := {"grunt": 36.0, "swarm": 34.0, "heavy": 34.0, "rusher": 34.0, "boss": 58.0}
+const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "oil": 3, "flame": 4, "magnet": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9}
+const LOOK_COL := [0, 1, 2, 3, 5]          # 적 그림 칸: 일반병·떼거리·중장갑·돌격병·보스
+const LOOK_SIZE := [36.0, 34.0, 34.0, 34.0, 58.0]
 const PRIO := {"first": "앞선 적", "strong": "강한 적", "near": "가까운 적"}
 const PING_ORDER := ["look", "danger", "build", "road", "mine"]
 const PING_COL := [Color("3F9BD6"), Color("D2452F"), Color("E9B935"), Color("C9A15F"), Color("38A672")]
@@ -97,7 +96,10 @@ var _code_open := false
 var _menu_focus := 0
 var _record := {}
 var _record_done := false
-var _flip := 0               # R 로 길 조각 방향 바꾸기
+var _flip := 0
+var _trail := {}             # 길 그리기 중: {e, i, cells[], j}
+var _kit_open := false
+var _kit_pick: Array = []
 var _summary_wave := 0
 var _summary_t := 0.0
 var _tut := -1               # 첫 판 안내 단계 (-1 = 끝)
@@ -121,6 +123,9 @@ var ready_lobby: Button
 var col_btns: Array = []
 var build_btns := {}
 var road_btns := {}
+var slot_btns: Array = []
+var kit_btns := {}
+var fix_btn
 var confirm_btn: Button
 var cancel_btn: Button
 var ability_btn: Button
@@ -375,22 +380,24 @@ func _build_hud() -> void:
 	fx_btn = _btn(hud, Rect2(-100, -100, 1, 1), "", _noop, "clear")
 	quit_btn.visible = false
 	fx_btn.visible = false
-	var slots := ["gun", "cannon", "cold", "oil", "flame", "magnet"]
-	for i in slots.size():
-		var k: String = slots[i]
-		if GData.TOWERS.has(k):
-			build_btns[k] = _btn(hud, Rect2(347 + i * 75, 634, 70, 72), "", _set_mode.bind("build:" + k), "clear")
-			build_btns[k].tooltip_text = "단축키 %d" % (i + 1)
-		else:
-			var locked := _btn(hud, Rect2(347 + i * 75, 634, 70, 72), "", _noop, "clear")
-			locked.disabled = true
-			locked.tooltip_text = "2단계에서 열려요"
+	for i in GData.KIT_SIZE:
+		var b := _btn(hud, Rect2(347 + i * 75, 634, 70, 72), "", _on_slot.bind(i), "clear")
+		b.tooltip_text = "단축키 %d" % (i + 1)
+		slot_btns.append(b)
+	var kb := _btn(hud, Rect2(724, 634, 70, 72), "", _toggle_kit, "clear")
+	kb.tooltip_text = "공구함 바꾸기 (K) · 1웨이브 준비 중, 짓기 전에만"
+	build_btns["kit"] = kb
+	for i in GData.TOWER_ORDER.size():
+		var k: String = GData.TOWER_ORDER[i]
+		kit_btns[k] = _btn(hud, Rect2(), "", _on_kit_pick.bind(k), "clear")
+		kit_btns[k].tooltip_text = "%s · %s" % [GData.TOWERS[k]["name"], GData.TOWERS[k]["role"]]
 	for k in GData.REWARDS:
 		reward_btns[k] = _btn(hud, Rect2(), str(GData.REWARDS[k]), _on_vote.bind(k), "sec", 14)
 		reward_btns[k].toggle_mode = true
 	tut_skip = _btn(hud, Rect2(), "건너뛰기", _skip_tutorial, "sec", 12)
-	road_btns["detour"] = _btn(hud, Rect2(28, 162, 86, 46), "우회로 +4\nZ", _set_mode.bind("road:detour"), "sec", 12)
-	road_btns["bend"] = _btn(hud, Rect2(118, 162, 86, 46), "굽잇길 +2\nX", _set_mode.bind("road:bend"), "sec", 12)
+	road_btns["draw"] = _btn(hud, Rect2(28, 162, 116, 46), "길 그리기\nZ", _set_mode.bind("road:draw"), "sec", 12)
+	road_btns["undo"] = _btn(hud, Rect2(148, 162, 56, 46), "되돌\n리기", _on_undo, "sec", 11)
+	road_btns["undo"].tooltip_text = "Ctrl+Z · 같은 준비 단계 안에서 자재를 돌려받아요"
 	confirm_btn = _btn(hud, Rect2(28, 212, 116, 34), "확정 · E", _on_confirm, "pri", 12)
 	cancel_btn = _btn(hud, Rect2(148, 212, 56, 34), "취소", _on_cancel_draft, "sec", 12)
 	ability_btn = _btn(hud, Rect2(186, 624, 132, 74), "", _set_mode.bind("ability"), "clear")
@@ -414,6 +421,7 @@ func _build_hud() -> void:
 	a_btn = _btn(hud, Rect2(), "", _on_upgrade.bind("a"), "sec", 12)
 	b_btn = _btn(hud, Rect2(), "", _on_upgrade.bind("b"), "sec", 12)
 	move_btn = _btn(hud, Rect2(), "이동", _on_move, "sec", 12)
+	fix_btn = _btn(hud, Rect2(), "수리 · 자재 1", _on_fix, "sec", 12)
 	sell_btn = _btn(hud, Rect2(), "판매", _on_sell, "sec", 12)
 
 
@@ -832,10 +840,17 @@ func _enter_game() -> void:
 	_panel = ""
 	_record_done = false
 	_flip = 0
+	_trail = {}
+	_kit_open = false
 	_summary_wave = 0
 	_tut = 0
 	if web and str(JavaScriptBridge.get_interface("GilUI").load_key("tutorial")) == "done":
 		_tut = -1
+	if web and s and s.m and s.m.wave == 1 and s.m.phase == "prep":      # 지난번 공구함
+		var saved := str(JavaScriptBridge.get_interface("GilUI").load_key("kit"))
+		var kit := Array(saved.split(",")) if saved != "" else []
+		if GMatch.kit_ok(kit):
+			s.command({"op": "kit", "v": kit})
 	_theme = GData.theme_of(s.m.wave) if s and s.m else 0
 	_theme_goal = _theme
 	_trans_t = 0.0
@@ -846,6 +861,8 @@ func _enter_game() -> void:
 # ── 매 프레임 ──
 
 func _process(delta: float) -> void:
+	MAP = GData.ORIGIN
+	CELL = GData.CELL_PX
 	_tick += delta
 	_toast_t -= delta
 	_shake = maxf(_shake - delta * 3.0, 0.0)
@@ -943,9 +960,9 @@ func _update_theme(delta: float) -> void:
 
 
 func _tex(theme: int, part: String) -> Texture2D:
-	var key := "%d%s" % [theme, part]
+	var key := "%s%d%s" % [GData.LAYOUT, theme, part]
 	if not _theme_tex.has(key):
-		_theme_tex[key] = load("res://art/map/%s_%s.png" % [GData.THEMES[theme]["id"], part])
+		_theme_tex[key] = load("res://art/map/%s_%s_%s.png" % [GData.LAYOUT, GData.THEMES[theme]["id"], part])
 	return _theme_tex[key]
 
 
@@ -1112,60 +1129,88 @@ func _update_hover() -> void:
 	var grid := (get_local_mouse_position() - _off - MAP) / CELL
 	var inside := grid.x >= 0 and grid.y >= 0 and grid.x < GData.W and grid.y < GData.H and get_viewport().gui_get_hovered_control() == self
 	hover = grid if inside else Vector2(-1, -1)
-	hover_edit = {}
+	if _trail.is_empty() or not inside:
+		return
 	var m := s.m
-	if mode.begins_with("road:") and inside and m.phase == "prep" and int(m.players[s.seat].get("edits", 0)) > 0:
-		var cells := m.tower_cells()
-		var kind := mode.substr(5)
-		var near := m.board.best_edit(grid, kind, cells)
-		if near.is_empty():
+	var c := Vector2i(grid)
+	var cells: Array = _trail["cells"]
+	var last: Vector2i = cells[-1] if not cells.is_empty() else m.board.paths[int(_trail["e"])][int(_trail["i"])]
+	if c == last:
+		return
+	var guard := 0
+	while last != c and guard < 40:      # 마우스가 빨리 움직여도 한 칸씩 잇는다
+		guard += 1
+		var d := c - last
+		var step := Vector2i(signi(d.x), 0) if absi(d.x) >= absi(d.y) else Vector2i(0, signi(d.y))
+		var n := last + step
+		_trail_step(m, n)
+		cells = _trail["cells"]
+		last = cells[-1] if not cells.is_empty() else m.board.paths[int(_trail["e"])][int(_trail["i"])]
+		if int(_trail.get("j", -1)) >= 0:
 			return
-		# 같은 자리의 두 방향 중 포탑에 더 좋은 쪽이 기본, R 로 바꾼다
-		var options := [near]
-		var alt := m.board.reroute(int(near["e"]), int(near["i"]), kind, -int(near["side"]), cells)
-		if alt.has("path"):
-			options.append({"e": near["e"], "i": near["i"], "kind": kind, "side": -int(near["side"]), "path": alt["path"]})
-		options.sort_custom(func(a, b): return _gain(m, int(a["e"]), a["path"]) > _gain(m, int(b["e"]), b["path"]))
-		hover_edit = options[_flip % options.size()]
 
 
-## 길을 바꿨을 때 사거리 안에 들어오는 길 칸의 증가량 (고른 내 포탑이 있으면 그 포탑 기준)
+## 길 그리기 한 칸: 뒤로 가면 지우고, 같은 길에 닿으면 끝점(B)
+func _trail_step(m: GMatch, n: Vector2i) -> void:
+	var e := int(_trail["e"])
+	var path: Array = m.board.paths[e]
+	var cells: Array = _trail["cells"]
+	_trail["j"] = -1
+	var back := cells.find(n)
+	if back >= 0:
+		_trail["cells"] = cells.slice(0, back + 1)
+		return
+	if n == path[int(_trail["i"])]:
+		_trail["cells"] = []
+		return
+	var j := path.find(n)
+	if j >= 0:
+		_trail["j"] = j
+		cells.append(n)
+		return
+	cells.append(n)
+
+
+## 지금 그리는 선으로 만든 새 경로 (끝점이 없으면 빈 배열)
+func _trail_path(m: GMatch) -> Array:
+	if _trail.is_empty() or int(_trail.get("j", -1)) < 0:
+		return []
+	var cells: Array = (_trail["cells"] as Array).duplicate()
+	cells.pop_back()
+	return m.board.spliced(int(_trail["e"]), int(_trail["i"]), int(_trail["j"]), cells)
+
+
 func _gain(m: GMatch, e: int, path: Array) -> int:
-	var trial: Array = m.board.paths.duplicate()
-	trial[e] = path
-	var total := 0
-	for id in m.towers:
-		if m.towers.has(selected) and id != selected:
-			continue
-		var t: Dictionary = m.towers[id]
-		var c := Vector2i(int(t["x"]), int(t["y"]))
-		var r := m.tower_range(t)
-		total += Board.coverage(c, r, trial) - Board.coverage(c, r, m.board.paths)
-	return total
+	return GBot.gain_of(m, e, path, selected if m.towers.has(selected) else -1)
 
 
-## 내 포탑을 고른 채 길 조각을 누르면 그 포탑을 가장 많이 감싸는 자리를 바로 미리보기로 올린다
-func _auto_wrap(kind: String) -> void:
+## 내 포탑을 고른 채 길 그리기를 누르면 그 포탑을 가장 많이 감싸는 다시 그리기를 바로 미리보기로 올린다
+func _auto_wrap() -> void:
 	var m := s.m
 	if not m.towers.has(selected) or int(m.towers[selected]["owner"]) != s.seat:
 		return
-	var cells := m.tower_cells()
+	var mat := int(m.players[s.seat]["mat"])
 	var best := {}
 	var best_gain := 0
 	for e in m.board.paths.size():
 		for i in m.board.paths[e].size():
-			for side in [1, -1]:
-				var r := m.board.reroute(e, i, kind, side, cells)
-				if r.has("path"):
-					var g := _gain(m, e, r["path"])
+			for kind in Board.SHAPES:
+				for side in [1, -1]:
+					var path := m.board.candidate(e, i, kind, side)
+					if path.is_empty():
+						continue
+					var r := m.check_route(s.seat, e, path)
+					if r.has("err") or int(r["cost"]) > mat or not (r["moves"] as Array).is_empty():
+						continue
+					var g := GBot.gain_of(m, e, path, selected)
 					if g > best_gain:
 						best_gain = g
-						best = {"e": e, "i": i, "kind": kind, "side": side}
+						best = {"e": e, "path": path, "cost": r["cost"]}
 	if best.is_empty():
-		_say("이 포탑 둘레에는 이 조각으로 늘릴 수 있는 길이 없어요")
+		_say("이 포탑 둘레에 내 자재로 늘릴 수 있는 길이 없어요 · 직접 끌어서 그려 보세요")
 		return
-	s.command({"op": "draft", "e": best["e"], "i": best["i"], "kind": kind, "side": best["side"]})
-	_say("이 포탑 사거리 안 길이 %d칸 늘어나는 자리예요 · 마우스로 다른 자리, R 로 방향 바꾸기" % best_gain)
+	s.command({"op": "draft", "e": best["e"], "path": Board.flat(best["path"])})
+	_say("이 포탑 사거리 안 길이 %d칸 늘어나요 · 자재 %d · 다른 모양은 길을 직접 끌어서" % [best_gain, int(best["cost"])])
 
 
 func _update_hud() -> void:
@@ -1173,20 +1218,28 @@ func _update_hud() -> void:
 	var prep := m.phase == "prep"
 	var me: Dictionary = m.players[s.seat]
 	var locked := _trans_t > 0.0
-	for k in build_btns:
-		build_btns[k].disabled = locked or not prep or int(me["gold"]) < int(GData.TOWERS[k]["cost"])
-		build_btns[k].set_pressed_no_signal(false)
-	var my_edits := int(me.get("edits", 0))
-	var can_road := prep and not locked and my_edits > 0
-	for k in road_btns:
-		road_btns[k].visible = prep and my_edits > 0
-		road_btns[k].disabled = not can_road
-		road_btns[k].toggle_mode = true
-		road_btns[k].set_pressed_no_signal(mode == "road:" + k)
-	confirm_btn.visible = prep and my_edits > 0
-	cancel_btn.visible = prep and my_edits > 0
-	confirm_btn.disabled = not can_road or m.draft.is_empty()
-	cancel_btn.disabled = m.draft.is_empty()
+	var kit: Array = me["kit"]
+	for i in slot_btns.size():
+		var k: String = kit[i] if i < kit.size() else ""
+		slot_btns[i].disabled = k == "" or locked or not prep or int(me["gold"]) < int(GData.TOWERS[k]["cost"])
+	var can_kit := prep and m.wave == 1 and not _has_towers(m)
+	build_btns["kit"].disabled = not can_kit
+	if not can_kit:
+		_kit_open = false
+	for k in kit_btns:
+		kit_btns[k].visible = _kit_open
+	var can_road := prep and not locked
+	road_btns["draw"].visible = prep
+	road_btns["draw"].disabled = not can_road
+	road_btns["draw"].toggle_mode = true
+	road_btns["draw"].set_pressed_no_signal(mode == "road:draw")
+	road_btns["undo"].visible = prep
+	road_btns["undo"].disabled = not can_road or not m.undo_ready(s.seat)
+	var any_draft := _confirmable(m)
+	confirm_btn.visible = prep
+	cancel_btn.visible = prep
+	confirm_btn.disabled = not can_road or any_draft.is_empty()
+	cancel_btn.disabled = not m.drafts.has(s.seat) and _trail.is_empty()
 	ability_btn.disabled = m.phase != "combat" or bool(me["used"])
 	ready_btn.visible = prep
 	ready_btn.disabled = locked
@@ -1237,8 +1290,12 @@ func _update_inspector(prep: bool) -> void:
 	up_btn.visible = false
 	a_btn.visible = false
 	b_btn.visible = false
+	fix_btn.visible = false
 	move_btn.visible = mine and prep
 	sell_btn.visible = mine and prep
+	if not t.is_empty() and (GMatch.is_trap(t) or t["type"] == "signal"):
+		for k in prio_btns:
+			prio_btns[k].visible = false
 	if t.is_empty():
 		return
 	# 버튼 자리를 그리기 전에 정해 둬야 첫 클릭이 버튼에 닿는다
@@ -1260,7 +1317,13 @@ func _update_inspector(prep: bool) -> void:
 		b_btn.text = str(d["b"]["label"])
 		a_btn.disabled = not free and gold < int(d["up"][1])
 		b_btn.disabled = a_btn.disabled
-	sell_btn.text = "판매 +%d" % int(floor(int(t["spent"]) * GData.SELL_RATE))
+	sell_btn.text = ("환불 +%d" if bool(t.get("fresh", false)) else "판매 +%d") % m.sell_value(t)
+	if GMatch.is_trap(t):
+		var full := int(GData.tower_stats(t["type"], lv, str(t["branch"]))["uses"])
+		fix_btn.visible = int(t["uses"]) < full
+		fix_btn.disabled = int(m.players[s.seat]["mat"]) < GData.TRAP_REPAIR
+		fix_btn.position = move_btn.position + Vector2(0, -38)
+		fix_btn.size = Vector2(212, 32)
 
 
 func _side_top(m: GMatch) -> float:
@@ -1306,8 +1369,9 @@ func _set_mode(v: String) -> void:
 	_flip = 0
 	if mode != "" and not mode.begins_with("road:"):   # 길 미리보기 중에는 고른 포탑의 사거리 변화를 계속 보여 준다
 		selected = -1
-	if mode.begins_with("road:"):
-		_auto_wrap(mode.substr(5))
+	_trail = {}
+	if mode == "road:draw":
+		_auto_wrap()
 
 
 func _on_vote(k: String) -> void:
@@ -1332,7 +1396,7 @@ func _update_tutorial(m: GMatch) -> void:
 			mine += 1
 	if _tut == 0 and mine >= 1:
 		_tut = 1
-	if _tut == 1 and (int(me.get("edits", 0)) == 0 or m.wave >= 3):
+	if _tut == 1 and (int(me.get("mat", 0)) < GData.MAT_START or m.wave >= 3):
 		_tut = 2
 	if _tut == 2 and (int(me.get("support", 0)) > 0 or m.wave >= 4):
 		_skip_tutorial()
@@ -1364,15 +1428,70 @@ func _on_sell() -> void:
 	selected = -1
 
 
+## 확정할 미리보기: 내 것, 없으면 동료의 제안 (내 자재로 확정)
+func _confirmable(m: GMatch) -> Dictionary:
+	if m.drafts.has(s.seat):
+		return m.drafts[s.seat]
+	for k in m.drafts:
+		return m.drafts[k]
+	return {}
+
+
 func _on_confirm() -> void:
-	var d: Dictionary = s.m.draft
+	var d := _confirmable(s.m)
 	if d.is_empty():
 		return
-	s.command({"op": "edit", "e": d["e"], "i": d["i"], "kind": d["kind"], "side": d["side"]})
+	s.command({"op": "edit", "e": d["e"], "path": d["path"]})
 	mode = ""
+	_trail = {}
+
+
+func _on_undo() -> void:
+	s.command({"op": "undo"})
+
+
+func _on_fix() -> void:
+	s.command({"op": "repair", "id": selected})
+
+
+func _on_slot(i: int) -> void:
+	var kit: Array = s.m.players[s.seat]["kit"]
+	if i < kit.size():
+		_set_mode("build:" + str(kit[i]))
+
+
+func _has_towers(m: GMatch) -> bool:
+	for id in m.towers:
+		if int(m.towers[id]["owner"]) == s.seat:
+			return true
+	return false
+
+
+func _toggle_kit() -> void:
+	_kit_open = not _kit_open
+	if _kit_open:
+		_kit_pick = (s.m.players[s.seat]["kit"] as Array).duplicate()
+
+
+func _on_kit_pick(k: String) -> void:
+	if s.m == null:
+		return
+	if _kit_pick.has(k):
+		_kit_pick.erase(k)
+	elif _kit_pick.size() < GData.KIT_SIZE:
+		_kit_pick.append(k)
+	if _kit_pick.size() == GData.KIT_SIZE:
+		var ordered := []
+		for t in GData.TOWER_ORDER:
+			if _kit_pick.has(t):
+				ordered.append(t)
+		s.command({"op": "kit", "v": ordered})
+		if web:
+			JavaScriptBridge.get_interface("GilUI").save_key("kit", ",".join(ordered))
 
 
 func _on_cancel_draft() -> void:
+	_trail = {}
 	s.command({"op": "draft"})
 
 
@@ -1382,6 +1501,14 @@ func _on_ping_kind(k: String) -> void:
 
 func _gui_input(ev: InputEvent) -> void:
 	if s == null or s.m == null or _screen != "game":
+		return
+	if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT and not _trail.is_empty():
+		var path := _trail_path(s.m)
+		if not path.is_empty():
+			s.command({"op": "draft", "e": int(_trail["e"]), "path": Board.flat(path)})
+		elif (_trail["cells"] as Array).size() > 0:
+			_say("같은 길의 다른 칸에서 놓아야 해요")
+		_trail = {}
 		return
 	if ev is InputEventMouseButton and ev.pressed:
 		_menu_open = false
@@ -1407,10 +1534,11 @@ func _click(grid: Vector2) -> void:
 		s.command({"op": "move", "id": int(mode.substr(5)), "x": c.x, "y": c.y})
 		mode = ""
 	elif mode.begins_with("road:"):
-		if hover_edit.is_empty():
-			_say("여기에는 이 길 조각을 놓을 수 없어요")
+		var e := s.m.board.lane_of(c)
+		if e < 0:
+			_say("길 위의 한 칸을 누른 채 끌어서 같은 길의 다른 칸에서 놓아요")
 		else:
-			s.command({"op": "draft", "e": hover_edit["e"], "i": hover_edit["i"], "kind": hover_edit["kind"], "side": hover_edit["side"]})
+			_trail = {"e": e, "i": s.m.board.paths[e].find(c), "cells": [], "j": -1}
 	elif mode == "ability":
 		s.command({"op": "ability", "x": grid.x, "y": grid.y})
 		mode = ""
@@ -1470,15 +1598,19 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 	if s.m == null or _screen != "game":
 		return
 	match ev.keycode:
-		KEY_1: _key_mode("build:gun", build_btns["gun"])
-		KEY_2: _key_mode("build:cannon", build_btns["cannon"])
-		KEY_3: _key_mode("build:cold", build_btns["cold"])
-		KEY_6: _key_mode("build:magnet", build_btns["magnet"])
-		KEY_R:
-			if mode.begins_with("road:"):
-				_flip += 1
-		KEY_Z: _key_mode("road:detour", road_btns["detour"])
-		KEY_X: _key_mode("road:bend", road_btns["bend"])
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+			var i: int = ev.keycode - KEY_1
+			if i < slot_btns.size() and not slot_btns[i].disabled:
+				_on_slot(i)
+		KEY_K:
+			if not build_btns["kit"].disabled:
+				_toggle_kit()
+		KEY_Z:
+			if ev.ctrl_pressed or ev.meta_pressed:
+				if road_btns["undo"].visible and not road_btns["undo"].disabled:
+					_on_undo()
+			else:
+				_key_mode("road:draw", road_btns["draw"])
 		KEY_E:
 			if confirm_btn.visible and not confirm_btn.disabled:
 				_on_confirm()
@@ -1574,6 +1706,11 @@ func _tag(center: Vector2, col: int, size_px := 18.0) -> void:
 			draw_polyline(p, Color.WHITE, w, true)
 
 
+func _mk(t: Dictionary) -> int:
+	var lv := int(t["lv"])
+	return 0 if lv <= 1 else (1 if lv == 2 else (2 if str(t["branch"]) == "a" else 3))
+
+
 func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Vector2, cell_px: float, tint := Color.WHITE) -> void:
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
 	var src := Rect2((mk * 4 + col) * 128, int(TOWER_ROW[type]) * 128, 128, 128)
@@ -1582,7 +1719,18 @@ func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Ve
 
 
 func _enemy_icon(type: String, r: Rect2, tint := Color.WHITE) -> void:
-	draw_texture_rect_region(TEX_ENEMIES, r, Rect2(int(ENEMY_COL[type]) * 128, 0, 128, 128), tint)
+	var look: Array = GData.ENEMIES[type]["look"]
+	var col: int = LOOK_COL[int(look[0])]
+	var t := tint
+	if str(look[1]) != "":
+		t = tint * Color.WHITE.lerp(Color(str(look[1])), 0.55)
+	draw_texture_rect_region(TEX_ENEMIES, r, Rect2(col * 128, 0, 128, 128), t)
+
+
+func _enemy_px(type: String) -> float:
+	var look: Array = GData.ENEMIES[type]["look"]
+	var k := 1.0 if type != "mini" else 0.7
+	return float(LOOK_SIZE[int(look[0])]) * k * CELL / 28.0
 
 
 func _gate_badge(center: Vector2, e: int) -> void:
@@ -1631,20 +1779,27 @@ func _draw_grid(m: GMatch) -> void:
 	var line := Color(1, 1, 1, alpha)
 	if building:
 		var cells := m.tower_cells()
+		var trap := mode.begins_with("build:") and bool(GData.tower_stats(mode.substr(6), 1, "")["trap"])
 		for y in GData.H:
 			for x in GData.W:
 				var c := Vector2i(x, y)
 				var at := _p(Vector2(c))
-				if m.board.can_build(c, cells) == "":
+				if trap:
+					if m.board.can_build(c, cells, m.theme(), true) == "":
+						draw_rect(Rect2(at + Vector2(1, 1), Vector2(CELL - 2, CELL - 2)), Color(AMBER, 0.22))
+				elif m.board.can_build(c, cells, m.theme()) == "":
 					draw_rect(Rect2(at + Vector2(1, 1), Vector2(CELL - 2, CELL - 2)), Color(1, 1, 1, 0.14))
 				elif m.board.is_path(c):
 					draw_line(at + Vector2(3, CELL - 3), at + Vector2(CELL - 3, 3), Color(LAMP, 0.55), 1.4)
 	if building or editing:
-		var r := GData.LANDMARK
-		var a := _p(Vector2(r.position))
-		var b := _p(Vector2(r.end))
-		draw_rect(Rect2(a, b - a), Color(LAMP, 0.1))
-		_dashed_rect(Rect2(a, b - a), Color(LAMP, 0.75))
+		for r in [GData.LANDMARK] + ([] if m.board.opened else [GData.BLOCKED]):
+			var a := _p(Vector2(r.position))
+			var b := _p(Vector2(r.end))
+			draw_rect(Rect2(a, b - a), Color(LAMP, 0.1))
+			_dashed_rect(Rect2(a, b - a), Color(LAMP, 0.75))
+		for c in GData.ROCKS:
+			var a := _p(Vector2(c))
+			draw_line(a + Vector2(6, 6), a + Vector2(CELL - 6, CELL - 6), Color(LAMP, 0.5), 1.4)
 		_dashed_rect(Rect2(_p(Vector2.ZERO), Vector2(GData.W, GData.H) * CELL), Color(1, 1, 1, 0.5))
 	for x in GData.W + 1:
 		draw_line(_p(Vector2(x, 0)), _p(Vector2(x, GData.H)), line, 1.0)
@@ -1653,29 +1808,59 @@ func _draw_grid(m: GMatch) -> void:
 
 
 ## 실제 효과 구역: 밝은 점선 테두리와 태그가 항상 붙는다 (장식과 구분)
+## 실제 효과 구역: 밝은 점선 테두리와 태그가 항상 붙는다 (장식과 구분)
 func _draw_zones() -> void:
-	var zone := str(GData.THEMES[_theme]["zone"])
-	match zone:
-		"ice":
-			for r in GData.ice_zones(s.m.board.paths.size()):
-				_zone_cells(r, Color("BFE8F7"), Color("5FC7EA"), "빙판 · 가속", Vector2i(0, 2))
-		"lava":
-			for r in GData.lava_zones(s.m.board.paths.size()):
-				_zone_cells(r, FIRE, Color("FFE08A"), "용암 · 지속 피해", Vector2i(2, 0))
-		"sand":
-			var center := _p(GData.SAND_CENTER)
-			var radius := GData.SAND_RADIUS * CELL
-			draw_circle(center, radius, Color("E8C35A", 0.16))
-			for i in 5:
-				var y := -radius * 0.6 + i * radius * 0.3
-				var half := sqrt(maxf(radius * radius - y * y, 0.0)) * 0.72
-				var drift := fmod(_tick * 9.0 + i * 7.0, 14.0) - 7.0
-				draw_line(center + Vector2(-half + drift, y), center + Vector2(half + drift, y), Color("8C673A", 0.55), 1.4)
-			_dash_ring(center, radius, Color("FFE9A8"), 4.0 if bool(cfg["thick"]) else 2.0)
-			_zone_tag(center + Vector2(0, radius + 12), "모래바람 · 사거리 -25%", Color("FFE9A8"))
+	var m := s.m
+	var th := _theme
+	var editing := mode.begins_with("road:") or mode.begins_with("build:")
+	# 연못: 설원에서는 얼어 길을 낼 수 있다
+	if GData.pond_state(th) == "ice":
+		for r in GData.PONDS:
+			var on_road := false
+			for p in m.board.paths:
+				for c in p:
+					if (r as Rect2i).has_point(c):
+						on_road = true
+			if on_road or editing:
+				_zone_cells(r, Color("BFE8F7"), Color("5FC7EA"), "얼음 · 길만 · 빙판 가속", Vector2i(0, 2), on_road)
+	for c in m.ice_t:      # 보스가 남긴 빙판 자국
+		var a := _p(Vector2(c))
+		draw_rect(Rect2(a + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), Color("BFE8F7", 0.55))
+	# 사막: 옛 도로는 자재 없이 길을 낼 수 있다
+	if th >= 2:
+		for r in GData.OLD_ROADS:
+			var a := _p(Vector2(r.position))
+			var b := _p(Vector2(r.end))
+			_dashed_rect(Rect2(a, b - a), Color("FFE9A8"))
+			if editing:
+				_zone_tag(_tag_spot(r), "옛 도로 · 자재 0", Color("FFE9A8"))
+	# 화산부터: 균열 칸을 지나는 적은 지속 피해
+	if th >= 3:
+		for c in GData.CRACKS:
+			var a := _p(Vector2(c))
+			var live := m.board.is_path(c)
+			draw_rect(Rect2(a + Vector2(4, 4), Vector2(CELL - 8, CELL - 8)), Color(FIRE, 0.75 if live else 0.35))
+			draw_rect(Rect2(a + Vector2(8, 8), Vector2(CELL - 16, CELL - 16)), Color("FFB347", (0.6 + 0.25 * sin(_tick * 3.0 + c.x + c.y)) * (1.0 if live else 0.5)))
+			if editing:
+				draw_rect(Rect2(a - Vector2(CELL, CELL), Vector2(CELL * 3, CELL * 3)), Color(LAMP, 0.6), false, 1.0)
+		if editing:
+			_zone_tag(_p(Vector2(GData.CRACKS[0]) + Vector2(0.5, -0.6)), "균열 · 지속 피해 · 옆 칸 건설 금지", Color("FFE08A"))
+	# 사막: 이번 웨이브 모래바람 (준비 단계에 공개)
+	var spot := m.sand_spot()
+	if spot.x > -50:
+		var center := _p(spot)
+		var radius := GData.SAND_RADIUS * CELL
+		draw_circle(center, radius, Color("E8C35A", 0.16))
+		for i in 5:
+			var y := -radius * 0.6 + i * radius * 0.3
+			var half := sqrt(maxf(radius * radius - y * y, 0.0)) * 0.72
+			var drift := fmod(_tick * 9.0 + i * 7.0, 14.0) - 7.0
+			draw_line(center + Vector2(-half + drift, y), center + Vector2(half + drift, y), Color("8C673A", 0.55), 1.4)
+		_dash_ring(center, radius, Color("FFE9A8"), 4.0 if bool(cfg["thick"]) else 2.0)
+		_zone_tag(center + Vector2(0, radius + 12), "모래바람 · 사거리 -25%", Color("FFE9A8"))
 
 
-func _zone_cells(r: Rect2i, fill: Color, edge: Color, label: String, _icon_cell: Vector2i) -> void:
+func _zone_cells(r: Rect2i, fill: Color, edge: Color, label: String, _icon_cell: Vector2i, tag := true) -> void:
 	for y in range(r.position.y, r.end.y):
 		for x in range(r.position.x, r.end.x):
 			var at := _p(Vector2(x, y))
@@ -1691,7 +1876,8 @@ func _zone_cells(r: Rect2i, fill: Color, edge: Color, label: String, _icon_cell:
 	if bool(cfg["thick"]):
 		_dashed_rect(Rect2(a, b - a).grow(1.5), edge)
 		_dashed_rect(Rect2(a, b - a).grow(-1.5), edge)
-	_zone_tag(_tag_spot(r), label, edge)
+	if tag:
+		_zone_tag(_tag_spot(r), label, edge)
 
 
 ## 구역 이름표 자리: 위·아래·왼쪽·오른쪽 중 길도 포탑도 없는 쪽
@@ -1839,23 +2025,40 @@ func _draw_transition() -> void:
 	_banner("%s 도착" % GData.THEMES[_theme_goal]["name"], AMBER)
 
 
+## 화면에 보일 미리보기들: 지금 끌고 있는 선, 그다음 확정 전 미리보기(자리마다)
 func _draft_data(m: GMatch) -> Dictionary:
-	if not hover_edit.is_empty():
-		return hover_edit
-	if m.draft.is_empty():
-		return {}
-	var r := m.board.reroute(int(m.draft["e"]), int(m.draft["i"]), str(m.draft["kind"]), int(m.draft["side"]), m.tower_cells())
-	if not r.has("path"):
-		return {}
-	var edit: Dictionary = m.draft.duplicate()
-	edit["path"] = r["path"]
-	edit["shared"] = true
-	return edit
+	if not _trail.is_empty():
+		var tp := _trail_path(m)
+		var e := int(_trail["e"])
+		if tp.is_empty():
+			var partial: Array = m.board.paths[e].slice(0, int(_trail["i"]) + 1)
+			partial.append_array(_trail["cells"])
+			return {"e": e, "path": partial, "seat": s.seat, "live": true, "open": true}
+		var r := m.check_route(s.seat, e, tp)
+		return {"e": e, "path": tp, "seat": s.seat, "live": true, "cost": int(r.get("cost", 0)), "err": str(r.get("err", ""))}
+	if m.drafts.has(s.seat):
+		return _draft_of(m, s.seat)
+	for k in m.drafts:
+		return _draft_of(m, int(k))
+	return {}
+
+
+func _draft_of(m: GMatch, seat: int) -> Dictionary:
+	var d: Dictionary = m.drafts[seat]
+	return {"e": int(d["e"]), "path": Board.unflat(d["path"]), "seat": seat, "cost": int(d["cost"]), "err": ""}
 
 
 func _draw_draft(m: GMatch, edit: Dictionary) -> void:
-	if edit.is_empty():
-		return
+	for k in m.drafts:      # 다른 사람이 그리는 길은 그 사람 색으로 잠겨 보인다
+		if int(k) != int(edit.get("seat", -1)):
+			var other := _draft_of(m, int(k))
+			_draw_draft_one(m, other, Color(OWNER[int(m.players[int(k)].get("col", 0)) % 4], 0.8))
+	if not edit.is_empty():
+		var col := AMBER if str(edit.get("err", "")) == "" else LAMP
+		_draw_draft_one(m, edit, col)
+
+
+func _draw_draft_one(m: GMatch, edit: Dictionary, col: Color) -> void:
 	var path: Array = edit["path"]
 	var old: Array = m.board.paths[int(edit["e"])]
 	var fresh := []
@@ -1866,24 +2069,29 @@ func _draw_draft(m: GMatch, edit: Dictionary) -> void:
 		return
 	var from := maxi(int(fresh[0]) - 1, 0)
 	var to := mini(int(fresh[-1]) + 1, path.size() - 1)
+	var w := CELL * 0.46
+	if not bool(edit.get("open", false)):
+		for c in old:
+			if not path.has(c):
+				var a := _p(Vector2(c))
+				draw_rect(Rect2(a + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), Color(0.31, 0.26, 0.2, 0.9))
+				draw_line(a + Vector2(8, 8), a + Vector2(CELL - 8, CELL - 8), Color.WHITE, 2.4)
+				draw_line(a + Vector2(CELL - 8, 8), a + Vector2(8, CELL - 8), Color.WHITE, 2.4)
 	for i in range(from + 1, to + 1):
-		draw_line(_p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(path[i]) + Vector2(0.5, 0.5)), WELL, 18.0)
+		draw_line(_p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(path[i]) + Vector2(0.5, 0.5)), WELL, w + 5.0)
+	for i in range(from + 1, to + 1):
+		draw_line(_p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(path[i]) + Vector2(0.5, 0.5)), col, w)
 	for i in range(from, to + 1):
 		var c := _p(Vector2(path[i]) + Vector2(0.5, 0.5))
-		draw_rect(Rect2(c - Vector2(9, 9), Vector2(18, 18)), WELL)
-	for i in range(from + 1, to + 1):
-		draw_line(_p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(path[i]) + Vector2(0.5, 0.5)), AMBER, 13.0)
-	for i in range(from, to + 1):
-		var c := _p(Vector2(path[i]) + Vector2(0.5, 0.5))
-		draw_rect(Rect2(c - Vector2(6.5, 6.5), Vector2(13, 13)), AMBER)
+		draw_rect(Rect2(c - Vector2(w, w) * 0.5, Vector2(w, w)), col)
 	for i in range(from + 1, to + 1):
 		draw_dashed_line(_p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(path[i]) + Vector2(0.5, 0.5)), WELL, 2.0, 6.0)
-	for c in old:
-		if not path.has(c):
-			var a := _p(Vector2(c))
-			draw_rect(Rect2(a + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), Color(0.31, 0.26, 0.2, 0.9))
-			draw_line(a + Vector2(8, 8), a + Vector2(CELL - 8, CELL - 8), Color.WHITE, 2.4)
-			draw_line(a + Vector2(CELL - 8, 8), a + Vector2(8, CELL - 8), Color.WHITE, 2.4)
+	var mv: Array = []
+	if m.drafts.has(int(edit.get("seat", -1))) and not bool(edit.get("live", false)):
+		mv = m.drafts[int(edit["seat"])].get("moves", [])
+	for row in mv:      # 길을 막던 내 포탑이 옮겨 갈 자리
+		var a := _p(Vector2(int(row[1]), int(row[2])))
+		_dashed_rect(Rect2(a + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)), AMBER)
 
 
 func _draw_draft_info(m: GMatch, edit: Dictionary) -> void:
@@ -1892,28 +2100,39 @@ func _draw_draft_info(m: GMatch, edit: Dictionary) -> void:
 	var path: Array = edit["path"]
 	var e := int(edit["e"])
 	var old: Array = m.board.paths[e]
-	var who: Dictionary = m.players[clampi(int(edit.get("seat", s.seat)), 0, m.players.size() - 1)]
-	var piece: String = GData.PIECES[str(edit["kind"])]["name"]
-	_banner("%s 님이 %s 미리보는 중 · 확정 전엔 실제 길이 바뀌지 않아요   %d번 길 %d → %d칸 / 최대 %d" % [who["name"], piece, e + 1, old.size(), path.size(), GData.MAX_PATH], AMBER)
+	var seat := clampi(int(edit.get("seat", s.seat)), 0, m.players.size() - 1)
+	var who: Dictionary = m.players[seat]
+	var mat := int(m.players[s.seat]["mat"])
+	if bool(edit.get("open", false)):
+		_banner("%d번 길 다시 그리는 중 · 같은 길의 다른 칸에서 놓으세요 · 내 자재 %d" % [e + 1, mat], AMBER)
+		return
+	var err := str(edit.get("err", ""))
+	var cost := int(edit.get("cost", 0))
+	var price := ("자재 %d 사용" % cost) if cost > 0 else (("자재 %d 돌려받음" % -cost) if cost < 0 else "자재 0")
+	if err != "":
+		_banner("%d번 길 · %s" % [e + 1, err], DANGER, true)
+	elif seat == s.seat:
+		_banner("%s · 내 자재 %d · %d번 길 %d→%d/%d칸 · E 확정" % [price, mat, e + 1, old.size(), path.size(), m.cap()],
+			AMBER if cost <= mat else DANGER, cost > mat)
+	else:
+		_banner("%s 님 제안 · %d번 길 %d → %d칸 · %s · E 로 내 자재로 확정" % [who["name"], e + 1, old.size(), path.size(), price], AMBER)
 	var trial: Array = m.board.paths.duplicate()
 	trial[e] = path
 	var before := 0
 	var after := 0
 	var label := "전체 포탑 사거리 안 길"
+	var ids: Array = [selected] if m.towers.has(selected) else m.towers.keys()
 	if m.towers.has(selected):
 		var t: Dictionary = m.towers[selected]
-		var st := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
-		var c := Vector2i(int(t["x"]), int(t["y"]))
-		before = Board.coverage(c, float(st["range"]), m.board.paths)
-		after = Board.coverage(c, float(st["range"]), trial)
 		label = "%s %s 사거리 안 길" % [m.players[int(t["owner"])]["name"], GData.TOWERS[t["type"]]["name"]]
-	else:
-		for id in m.towers:
-			var t: Dictionary = m.towers[id]
-			var st := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
-			var c := Vector2i(int(t["x"]), int(t["y"]))
-			before += Board.coverage(c, float(st["range"]), m.board.paths)
-			after += Board.coverage(c, float(st["range"]), trial)
+	for id in ids:
+		var t: Dictionary = m.towers[id]
+		if GMatch.is_trap(t) or t["type"] == "signal":
+			continue
+		var c := Vector2i(int(t["x"]), int(t["y"]))
+		var rr := m.tower_range(t)
+		before += Board.coverage(c, rr, m.board.paths)
+		after += Board.coverage(c, rr, trial)
 	var r := Rect2(Vector2(808, 520), Vector2(196, 66))
 	draw_style_box(_box(Color(0.1, 0.11, 0.13, 0.96), LINE, 5), r)
 	_t(r.position + Vector2(10, 7), label, 11, SUB)
@@ -1934,7 +2153,23 @@ func _banner(text: String, col: Color, danger := false) -> void:
 func _draw_tower(m: GMatch, t: Dictionary) -> void:
 	var at := _p(Vector2(int(t["x"]), int(t["y"])))
 	var owner_col := int(m.players[int(t["owner"])].get("col", 0)) % 4
-	_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL)
+	var trap := GMatch.is_trap(t)
+	var broken := trap and int(t["uses"]) <= 0
+	if trap:
+		var u := CELL / 100.0
+		draw_texture_rect_region(TEX_TOWERS, Rect2(at + Vector2(6, 6) * u, Vector2(88, 88) * u),
+			Rect2((_mk(t) * 4 + owner_col) * 128, int(TOWER_ROW[t["type"]]) * 128, 128, 128), Color(0.55, 0.5, 0.5, 0.8) if broken else Color.WHITE)
+	else:
+		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(1.0, 0.6, 0.5) if float(t.get("heat", 0.0)) > 0.0 else Color.WHITE)
+	if trap:      # 남은 내구
+		var full := float(GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["uses"])
+		var ratio := clampf(float(t["uses"]) / maxf(full, 1.0), 0.0, 1.0)
+		draw_rect(Rect2(at + Vector2(3, CELL - 6), Vector2(CELL - 6, 3)), WELL)
+		draw_rect(Rect2(at + Vector2(3, CELL - 6), Vector2((CELL - 6) * ratio, 3)), AMBER if ratio > 0.3 else LAMP)
+		if broken:
+			_t(at + Vector2(CELL * 0.5, CELL * 0.2), "수리", 11, LAMP, true, 1)
+	if float(t.get("heat", 0.0)) > 0.0:
+		_t(at + Vector2(CELL * 0.5, -10), "과열", 11, FIRE, true, 1)
 	if bool(cfg["pattern"]):      # 색 대신 무늬: 주인 기호를 크게
 		_tag(at + Vector2(CELL * 0.8, CELL * 0.18), owner_col, 11.0)
 	if int(t["id"]) == selected:
@@ -1951,8 +2186,11 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 	var pos := Board.pos_on(path, d)
 	var dir := Board.pos_on(path, d + 0.12) - pos
 	var center := _p(pos)
-	var size_px: float = float(ENEMY_SIZE[en["type"]]) * 0.96
+	var size_px: float = _enemy_px(en["type"]) * 0.96
 	var ghost := m.is_ghost(en)
+	var look: Array = GData.ENEMIES[en["type"]]["look"]
+	if str(look[1]) != "":      # 테마 전용 적: 색 고리
+		draw_arc(center, size_px * 0.5, 0, TAU, 20, Color(str(look[1])), 2.2, true)
 	draw_arc(center, size_px * 0.42, 0, TAU, 18, Color(1, 1, 1, 0.42), 1.2, true)   # 어떤 바닥에서도 읽히는 발밑 테두리
 	var angle := dir.angle() + PI * 0.5 if dir.length() > 0.001 else 0.0
 	draw_set_transform(_off + center, angle)
@@ -1973,6 +2211,11 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 		_icon(Vector2i(3, 0), Rect2(center + Vector2(size_px * 0.22 - 14, -size_px * 0.5 - 2), Vector2(13, 13)))
 	if float(en["slow"]) > 0.0:
 		_icon(Vector2i(0, 0), Rect2(center + Vector2(size_px * 0.22, -size_px * 0.5 - 2), Vector2(13, 13)))
+	if float(en.get("oil", 0.0)) > 0.0:      # 기름: 불꽃탑 피해 3배
+		draw_circle(center + Vector2(-size_px * 0.32, size_px * 0.3), 3.5, Color("2A1E12"))
+		draw_circle(center + Vector2(-size_px * 0.22, size_px * 0.38), 2.5, Color("2A1E12"))
+	if float(en.get("sh", 0.0)) > 0.0:      # 수송차 보호막
+		draw_arc(center, size_px * 0.58, 0, TAU, 20, Color("E9B935", 0.8), 1.8, true)
 
 
 func _draw_fx() -> void:
@@ -2067,7 +2310,11 @@ func _draw_cursor(m: GMatch) -> void:
 			type = t["type"]
 			lv = int(t["lv"])
 			branch = str(t["branch"])
-		var ok := m.board.can_build(c, m.tower_cells()) == ""
+		var trap := bool(GData.tower_stats(type, 1, "")["trap"])
+		var cells := m.tower_cells()
+		if mode.begins_with("move:"):
+			cells.erase(Vector2i(int(m.towers[int(mode.substr(5))]["x"]), int(m.towers[int(mode.substr(5))]["y"])))
+		var ok := m.board.can_build(c, cells, m.theme(), trap) == ""
 		var col := AMBER if ok else LAMP
 		var st := GData.tower_stats(type, lv, branch)
 		st["range"] = m.tower_range({"type": type, "lv": lv, "branch": branch, "x": c.x, "y": c.y})
@@ -2075,8 +2322,12 @@ func _draw_cursor(m: GMatch) -> void:
 		_dash_ring(center, float(st["range"]) * CELL, col, 1.6)
 		_tower_sprite(type, lv, branch, int(m.players[s.seat].get("col", 0)) % 4, at, CELL, Color(1, 1, 1, 0.75))
 		draw_rect(Rect2(at, Vector2(CELL, CELL)), col, false, 2.0)
-		if ok:
+		if ok and not trap and type != "signal":
 			_tip(center + Vector2(0, -CELL * 0.95), "사거리 안 길 %d칸" % Board.coverage(c, float(st["range"]), m.board.paths))
+		elif not ok:
+			var why := m.board.can_build(c, cells, m.theme(), trap)
+			if why != "이미 포탑이 있어요":
+				_tip(center + Vector2(0, -CELL * 0.95), why)
 	elif mode == "ability":
 		var p := _p(hover)
 		var rr := GData.ABILITY_RADIUS * CELL
@@ -2242,14 +2493,14 @@ func _draw_lobby() -> void:
 	_t(Vector2(63, 240), code, 24 if code.length() > 8 else 36, AMBER, true)
 	_t(Vector2(49, 380), "경기장", 14, INK, true)
 	_draw_mini(Rect2(49, 408, 218, 146), null)
-	_t(Vector2(49, 560), "초원 · 입구 %d개 · %d/%d명" % [GData.lanes_for(s.seats.size()), s.seats.size(), GSession.MAX_SEATS], 12, SUB)
+	_t(Vector2(49, 560), "초원 · %s · 입구 %d개 · %d/%d명" % ["21×13" if s.seats.size() <= 2 else "25×15", GData.lanes_for(s.seats.size()), s.seats.size(), GSession.MAX_SEATS], 12, SUB)
 	for i in GSession.MAX_SEATS:
 		_draw_crew(i)
 	_card(Rect2(968, 140, 280, 440), WELL, Color("1A1D20"))
 	_t(Vector2(984, 156), "방 채팅 · 경기 중에도 이어져요", 12, SUB)
 	_card(Rect2(32, 604, 1216, 92))
-	_t(Vector2(53, 630), "기본 작전은 채팅으로 정하고, 입구 담당은 강제로 나누지 않아요", 14, INK, true)
-	_t(Vector2(53, 654), "경기 도중 새로 들어오기는 아직 안 돼요 · 나갔다 다시 들어오기는 돼요", 12, SUB)
+	_t(Vector2(53, 630), "포탑 10종 중 5종을 공구함에 담아요 · 1웨이브 준비 중 K 로 바꾸고, 서로 다르게 고를수록 좋아요", 14, INK, true)
+	_t(Vector2(53, 654), "길은 누구나 자기 공사 자재로 다시 그려요 · 경기 도중 새로 들어오기는 아직 안 돼요", 12, SUB)
 	if not s.is_host:
 		var st: String = net.status()
 		var msg := "방장이 시작하기를 기다리는 중"
@@ -2326,6 +2577,10 @@ func _draw_mini(r: Rect2, m) -> void:
 	var keep := _shake
 	_shake = 0.0
 	var theme: int = GData.theme_of(m.wave) if m != null else 0
+	if m == null:
+		GData.use_layout(maxi(s.seats.size(), 2))
+		MAP = GData.ORIGIN
+		CELL = GData.CELL_PX
 	var k := 1600.0 / 1280.0
 	draw_texture_rect_region(_tex(theme, "base"), view, Rect2(view.position * k, view.size * k))
 	var paths: Array = m.board.paths if m != null else Board.new(GData.lanes_for(s.seats.size())).paths
@@ -2335,8 +2590,6 @@ func _draw_mini(r: Rect2, m) -> void:
 	for e in paths.size():
 		_draw_road(paths[e], theme, e == worst)
 	draw_texture_rect_region(_tex(theme, "over"), view, Rect2(view.position * k, view.size * k))
-	if paths.size() >= 3:
-		_draw_gate3(paths[2][0], theme, base)
 	if m != null:
 		for id in m.towers:
 			var t: Dictionary = m.towers[id]
@@ -2362,12 +2615,14 @@ func _draw_game() -> void:
 	for path in m.board.paths:         # 03 길
 		_draw_road(path)
 		_draw_chevrons(path)
+	if not m.board.opened:             # 아직 닫힌 길: 흐린 점선 (그 땅은 지을 수 있다)
+		var ex: Array = GData.EXTRA_PATH
+		for i in range(1, ex.size()):
+			draw_dashed_line(_p(Vector2(ex[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(ex[i]) + Vector2(0.5, 0.5)), Color(1, 1, 1, 0.28), 3.0, 7.0)
 	_draw_zones()                      # 실제 효과 구역
 	_draw_grid(m)
 	_draw_draft(m, edit)
 	_draw_over()                       # 04~05 작업장·랜드마크·본부·입구
-	if m.board.paths.size() >= 3:
-		_draw_gate3(m.board.paths[2][0], _theme, Transform2D(0.0, _off))
 	_draw_castle_damage(m)
 	if m.phase == "prep" and m.towers.has(selected) and mode == "":
 		_draw_range_focus(m)
@@ -2387,14 +2642,15 @@ func _draw_game() -> void:
 		return
 	var boss := {}
 	for en in m.enemies:
-		if en["type"] == "boss":
+		if GData.is_boss(en["type"]) and not bool(en.get("cl", false)):
 			boss = en
 	if not edit.is_empty():
 		_draw_draft_info(m, edit)
 	elif not boss.is_empty():
 		_boss_bar(boss)
 	elif m.phase == "combat" and m.wave % GData.THEME_LEN == 0:
-		_banner("보스 접근 · 1번 입구 · 도착 시 본부 −15", DANGER, true)
+		var bt: String = GData.THEME_BOSS[GData.theme_of(m.wave)]
+		_banner("보스 접근 · %s · 도착 시 본부 −15" % GData.ENEMIES[bt]["name"], DANGER, true)
 	elif m.phase == "prep" and _summary_t > 0.0 and not m.summary.is_empty():
 		_banner(_summary_text(m), AMBER)
 	elif _notice_t > 0.0 and _trans_t <= 0.0:
@@ -2438,9 +2694,15 @@ func _summary_text(m: GMatch) -> String:
 
 func _boss_bar(boss: Dictionary) -> void:
 	var r := Rect2(440, 98, 400, 40)
+	var d: Dictionary = GData.ENEMIES[boss["type"]]
 	_metal(r, Color("3a2422"), Color("2a1a19"), DANGER, 5.0)
-	_t(r.position + Vector2(14, 4), "보스 · " + str(GData.ENEMIES["boss"]["name"]), 12, Color("ffd2d3"), true)
-	_t(Vector2(r.end.x - 14, r.position.y + 4), "도착 시 본부 −15", 12, DANGER, true, 2)
+	_t(r.position + Vector2(14, 4), "보스 · " + str(d["name"]), 12, Color("ffd2d3"), true)
+	var info := "도착 시 본부 −15"
+	if d.has("overheat"):
+		info = "다음 과열까지 %d초" % ceili(maxf(float(d["overheat"][0]) - float(boss.get("sk", 0.0)), 0.0))
+	elif str(d.get("skill", "")) != "":
+		info = str(d["skill"])
+	_t(Vector2(r.end.x - 14, r.position.y + 4), info, 12, DANGER, true, 2)
 	var ratio := clampf(float(boss["hp"]) / maxf(float(boss["max"]), 1.0), 0.0, 1.0)
 	draw_rect(Rect2(r.position + Vector2(14, 24), Vector2(372, 8)), Color("2a1a19"))
 	draw_rect(Rect2(r.position + Vector2(14, 24), Vector2(372 * ratio, 8)), DANGER)
@@ -2511,8 +2773,8 @@ func _draw_team(m: GMatch) -> void:
 		_t(Vector2(976, y + 1), str(p["name"]).left(5), 13, INK, true)
 		var state := "끊김" if not p["online"] else ("전투 중" if m.phase == "combat" else ("투표함" if m.phase == "reward" and str(p.get("vote", "")) != "" else ("준비 완료" if p["ready"] else "건설 중")))
 		_t(Vector2(1030, y + 2), state, 12, AMBER if state == "준비 완료" or state == "투표함" else SUB, true)
-		if int(p.get("edits", 0)) > 0:
-			_icon(Vector2i(3, 2), Rect2(1100, y + 2, 14, 14))
+		_icon(Vector2i(3, 2), Rect2(1094, y + 2, 14, 14))
+		_t(Vector2(1110, y + 2), str(int(p.get("mat", 0))), 12, INK, true)
 		_t(Vector2(1186, y + 1), "%dG" % int(p["gold"]), 13, AMBER, true, 2)
 		draw_rect(Rect2(1191, y + 5, 7, 7), OK_GREEN if p["online"] else Color("6a7076"))
 	_t(Vector2(1242, 62), "ESC", 12, SUB, true, 1)
@@ -2528,13 +2790,13 @@ func _draw_side(m: GMatch) -> void:
 	var me: Dictionary = m.players[s.seat]
 	var chip := Rect2(16, 98, 200, 30)
 	_card(chip, Color(0.11, 0.12, 0.13, 0.9), LINE)
-	_t(chip.position + Vector2(10, 7), "길 개조", 12, INK, true)
-	_icon(Vector2i(3, 2), Rect2(chip.position + Vector2(64, 7), Vector2(16, 16)), Color.WHITE if int(me.get("edits", 0)) > 0 else Color(0.5, 0.5, 0.5, 0.35))
-	_t(chip.position + Vector2(84, 7), "나 %d" % int(me.get("edits", 0)), 12, AMBER, true)
-	_t(chip.position + Vector2(190, 7), "팀 %d" % m.team_edits(), 12, SUB, true, 2)
-	if road_btns["detour"].visible:
+	_t(chip.position + Vector2(10, 7), "공사 자재", 12, INK, true)
+	_icon(Vector2i(3, 2), Rect2(chip.position + Vector2(76, 7), Vector2(16, 16)))
+	_t(chip.position + Vector2(96, 7), "%d / %d" % [int(me.get("mat", 0)), GData.MAT_MAX], 12, AMBER, true)
+	_t(chip.position + Vector2(190, 7), "+%d/웨이브" % GData.MAT_WAVE, 11, SUB, true, 2)
+	if road_btns["draw"].visible:
 		_card(Rect2(16, 136, 200, 118))
-		_t(Vector2(28, 142), "길 조각 · R 방향 · E 확정", 12, SUB, true)
+		_t(Vector2(28, 142), "길 다시 그리기 · 최대 %d칸" % m.cap(), 12, SUB, true)
 	var top := _team_bottom(m) + 8.0
 	var idx := GData.theme_of(m.wave)
 	if idx + 1 < GData.THEMES.size():
@@ -2563,14 +2825,15 @@ func _draw_hint(m: GMatch) -> void:
 	var text := ""
 	if mode.begins_with("build:"):
 		var key := mode.substr(6)
-		parts = [str(["gun", "cannon", "cold", "oil", "flame", "magnet"].find(key) + 1), "클릭", "우클릭·ESC 끝"]
-		text = "빈 칸을 클릭해 %s 배치 · %dG · 계속 지을 수 있어요" % [GData.TOWERS[key]["name"], int(GData.TOWERS[key]["cost"])]
+		parts = [str((m.players[s.seat]["kit"] as Array).find(key) + 1), "클릭", "우클릭·ESC 끝"]
+		var where := "길 칸" if bool(GData.tower_stats(key, 1, "")["trap"]) else "빈 칸"
+		text = "%s을 클릭해 %s 배치 · %dG · 계속 지을 수 있어요" % [where, GData.TOWERS[key]["name"], int(GData.TOWERS[key]["cost"])]
 	elif mode == "ability":
 		parts = ["Q", "클릭", "ESC 취소"]
 		text = "범위를 확인하고 클릭해 사용 · 반경 %.1f칸 · %d초" % [GData.ABILITY_RADIUS, int(GData.ABILITY_TIME)]
 	elif mode.begins_with("road:"):
-		parts = ["클릭", "R 방향", "E 확정", "ESC"]
-		text = "바꿀 구간 가까이를 클릭해 미리보기 · 내 기회 %d" % int(m.players[s.seat].get("edits", 0))
+		parts = ["끌기", "E 확정", "Ctrl+Z", "ESC"]
+		text = "길 위 한 칸에서 눌러 끌고 같은 길의 다른 칸에서 놓기 · 자재 %d" % int(m.players[s.seat].get("mat", 0))
 	elif mode.begins_with("move:"):
 		parts = ["클릭", "ESC 취소"]
 		text = "옮길 빈 칸을 클릭 · 무료"
@@ -2596,8 +2859,8 @@ func _draw_hint(m: GMatch) -> void:
 func _draw_tutorial(m: GMatch) -> void:
 	if _tut < 0 or m.phase == "reward":
 		return
-	var steps := [["1 / 3", "건설", "아래 건설 칸(1~3)을 고르고 빈 칸을 눌러 포탑을 지어 보세요"],
-		["2 / 3", "길 바꾸기", "내 포탑을 누른 채 Z(우회로)를 누르면 그 포탑을 감싸는 길이 미리 보여요 · E 로 확정"],
+	var steps := [["1 / 3", "건설", "아래 건설 칸(1~5)을 고르고 빈 칸을 눌러 포탑을 지어 보세요 · K 로 공구함 바꾸기"],
+		["2 / 3", "길 그리기", "Z 를 누르고 길 위 한 칸에서 끌어 같은 길의 다른 칸에 놓으면 길이 바뀌어요 · E 로 확정"],
 		["3 / 3", "지원 능력", "전투가 시작되면 Q 로 긴급 냉각을 써서 적을 묶어 보세요"]]
 	var row: Array = steps[_tut]
 	var w := BOLD.get_string_size(str(row[2]), HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 190
@@ -2620,7 +2883,7 @@ func _draw_bar(m: GMatch) -> void:
 	var free := int(me.get("free_up", 0))
 	_t(Vector2(66, 684), ("무료 강화 %d회" % free) if free > 0 else "+%d / 웨이브" % GData.wave_gold(m.wave), 12, AMBER if free > 0 else SUB, true)
 	draw_line(Vector2(172, 626), Vector2(172, 696), LINE, 1.0)
-	_t(Vector2(347, 615), "건설 · 1~3·6" + (" · 전투 중 잠김" if m.phase != "prep" else ""), 12, SUB, true)
+	_t(Vector2(347, 615), "공구함 · 1~5" + (" · 전투 중 잠김" if m.phase != "prep" else " · K 바꾸기"), 12, SUB, true)
 	draw_line(Vector2(806, 626), Vector2(806, 696), LINE, 1.0)
 	_t(Vector2(822, 632), "핑 · Alt+클릭", 12, SUB, true)
 	draw_line(Vector2(1046, 626), Vector2(1046, 696), LINE, 1.0)
@@ -2654,16 +2917,14 @@ func _draw_bar_art(m: GMatch) -> void:
 		sub = "이번 웨이브 사용함" if bool(me["used"]) else "Q · 1회"
 	_t(ab.position + Vector2(60, 40), sub, 12, AMBER if usable else SUB, true)
 	# 건설 슬롯: 그림 : 글자 : 여백 ≈ 5 : 3 : 2
-	var names := ["gun", "cannon", "cold", "oil", "flame", "magnet"]
-	var labels := ["기관포탑", "대포탑", "냉각탑", "기름분사탑", "불꽃탑", "자석탑"]
-	var costs := [100, 150, 120, 110, 130, 140]
-	for i in 6:
+	var names: Array = me["kit"]
+	for i in names.size():
 		var t := Rect2(347 + i * 75, 634, 70, 72)
-		var real: bool = build_btns.has(names[i])
-		var b: Button = build_btns[names[i]] if real else null
-		var usable_t: bool = real and not b.disabled
-		var picked: bool = real and mode == "build:" + names[i]
-		var hot: bool = real and b.is_hovered() and usable_t
+		var real := true
+		var b: Button = slot_btns[i]
+		var usable_t: bool = not b.disabled
+		var picked: bool = mode == "build:" + str(names[i])
+		var hot: bool = b.is_hovered() and usable_t
 		if usable_t:
 			_metal(t, PANEL_HI.lightened(0.1) if hot else PANEL_HI, PANEL_LO, LINE)
 		else:
@@ -2671,12 +2932,21 @@ func _draw_bar_art(m: GMatch) -> void:
 		if picked:
 			draw_rect(Rect2(t.position.x + 3, t.end.y - 3, t.size.x - 10, 3), AMBER)
 		var tint := Color.WHITE if usable_t else Color(0.6, 0.6, 0.6, 0.55)
-		_tower_sprite(names[i], 1, "", my_col, t.position + Vector2(20, 9), 30.0, tint)
+		_tower_sprite(str(names[i]), 1, "", my_col, t.position + Vector2(20, 9), 30.0, tint)
 		_t(t.position + Vector2(6, 2), str(i + 1), 12, SUB, true)
 		if not real or m.phase != "prep":
 			_lock(t.position + Vector2(58, 8))
-		_t(t.position + Vector2(35, 41), labels[i], 12 if labels[i].length() <= 4 else 11, INK if usable_t else Color(SUB, 0.6), true, 1)
-		_t(t.position + Vector2(35, 55), str(costs[i]), 12, AMBER if usable_t else Color(SUB, 0.5), true, 1)
+		var label: String = GData.TOWERS[names[i]]["name"]
+		_t(t.position + Vector2(35, 41), label, 12 if label.length() <= 4 else 11, INK if usable_t else Color(SUB, 0.6), true, 1)
+		_t(t.position + Vector2(35, 55), str(int(GData.TOWERS[names[i]]["cost"])), 12, AMBER if usable_t else Color(SUB, 0.5), true, 1)
+	var kb := Rect2(724, 634, 70, 72)      # 공구함 바꾸기
+	var kb_on: bool = not build_btns["kit"].disabled
+	_metal(kb, PANEL_HI if kb_on else Color("3a3e43"), PANEL_LO if kb_on else Color("33373b"), AMBER if _kit_open else LINE)
+	_icon(Vector2i(2, 2), Rect2(kb.position + Vector2(21, 10), Vector2(28, 28)), Color.WHITE if kb_on else Color(1, 1, 1, 0.35))
+	_t(kb.position + Vector2(35, 44), "공구함", 12, INK if kb_on else Color(SUB, 0.6), true, 1)
+	_t(kb.position + Vector2(6, 2), "K", 12, SUB, true)
+	if _kit_open:
+		_draw_kit(m)
 	# 핑
 	for i in 5:
 		var pr := Rect2(822 + i * 38, 655, 32, 32)
@@ -2686,6 +2956,37 @@ func _draw_bar_art(m: GMatch) -> void:
 	if m.phase != "prep":
 		speed_btns[0].set_pressed_no_signal(m.speed == 1)
 		speed_btns[1].set_pressed_no_signal(m.speed == 2)
+
+
+## 공구함: 10종 중 5종 (1웨이브 준비 중, 짓기 전에만 바꿀 수 있다)
+func _draw_kit(m: GMatch) -> void:
+	var r := Rect2(300, 380, 680, 224)
+	_card(r)
+	_t(r.position + Vector2(16, 12), "공구함 · %d / %d 골라요" % [_kit_pick.size(), GData.KIT_SIZE], 15, INK, true)
+	var others := {}
+	for i in m.players.size():
+		if i != s.seat:
+			for t in m.players[i]["kit"]:
+				others[t] = true
+	var overlap := 0
+	for t in _kit_pick:
+		if others.has(t):
+			overlap += 1
+	_t(Vector2(r.end.x - 16, r.position.y + 14), ("동료와 겹침 %d종" % overlap) if overlap > 0 else "동료와 안 겹쳐요", 12, AMBER if overlap > 0 else OK_GREEN, true, 2)
+	var my_col := int(m.players[s.seat].get("col", 0)) % 4
+	for i in GData.TOWER_ORDER.size():
+		var k: String = GData.TOWER_ORDER[i]
+		var cell := Rect2(r.position + Vector2(16 + (i % 5) * 130, 44 + (i / 5) * 86), Vector2(124, 80))
+		var on := _kit_pick.has(k)
+		kit_btns[k].position = cell.position
+		kit_btns[k].size = cell.size
+		_metal(cell, Color("4a4334") if on else PANEL_HI, Color("3c3628") if on else PANEL_LO, AMBER if on else LINE)
+		_tower_sprite(k, 1, "", my_col, cell.position + Vector2(8, 16), 40.0)
+		_t(cell.position + Vector2(56, 12), str(GData.TOWERS[k]["name"]), 12, INK, true)
+		_t(cell.position + Vector2(56, 32), str(GData.TOWERS[k]["role"]), 11, SUB, true)
+		_t(cell.position + Vector2(56, 52), "%dG" % int(GData.TOWERS[k]["cost"]), 12, AMBER, true)
+		if others.has(k):
+			_t(cell.end - Vector2(8, 22), "동료", 11, OWNER_TEXT[1], true, 2)
 
 
 func _lock(at: Vector2) -> void:
@@ -2729,19 +3030,38 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 	var rows: Array = []
 	if t["type"] == "cold":
 		rows = [["감속", "%d%% / 60%%" % roundi(st["slow"] * 100)], ["범위" if st["aura"] else "사거리", "%.1f" % st["range"]]]
+	elif t["type"] == "signal":
+		rows = [["주변 사거리", "+%d%%" % roundi(st["buff"] * 100)], ["범위", "%.1f · 유령 실체화" % st["range"]]]
+		if float(st["mark"]) > 0.0:
+			rows.append(["받는 피해", "+%d%%" % roundi(st["mark"] * 100)])
+	elif bool(st["trap"]):
+		rows = [["지나가는 적마다", "%.0f" % st["dmg"]], ["내구", "%d / %d" % [int(t["uses"]), int(st["uses"])]]]
+		if float(st["slow"]) > 0.0:
+			rows.append(["감속", "%d%%" % roundi(st["slow"] * 100)])
+	elif t["type"] == "oil":
+		rows = [["기름", "%.0f초 · 불꽃 ×3" % st["oil"]], ["사거리", "%.1f" % st["range"]]]
+	elif t["type"] == "shock":
+		rows = [["피해", "%.0f · 감속된 적 ×2" % st["dmg"]], ["연쇄", "%d명 · %.1f칸" % [int(st["chain"]), st["jump"]]]]
+	elif t["type"] == "flame":
+		rows = [["초당 피해", "%.0f · 기름 ×3" % (st["dmg"] / st["cd"])], ["범위", "%.1f" % st["range"]]]
 	elif t["type"] == "magnet":
 		rows = [["방어 감소", "%d%% · 3초" % roundi(st["shred"] * 100)], ["범위" if st["aura"] else "사거리", "%.1f" % st["range"]]]
 	else:
 		rows = [["피해", "%.0f" % st["dmg"]], ["사거리", "%.1f" % st["range"]]]
 	var cover := Board.coverage(Vector2i(int(t["x"]), int(t["y"])), float(st["range"]), m.board.paths)
 	var edit := _draft_data(m)
+	if bool(st["trap"]) or t["type"] == "signal":
+		edit = {}
 	if not edit.is_empty():
 		var trial: Array = m.board.paths.duplicate()
 		trial[int(edit["e"])] = edit["path"]
 		rows.append(["사거리 안 길", "%d → %d" % [cover, Board.coverage(Vector2i(int(t["x"]), int(t["y"])), float(st["range"]), trial)]])
 	else:
 		rows.append(["사거리 안 길", "%d칸" % cover])
-	rows.append(["간격", "%.2fs" % st["cd"]])
+	if not bool(st["trap"]) and t["type"] != "signal":
+		rows.append(["간격", "%.2fs" % st["cd"]])
+	if bool(t.get("fresh", false)) and mine and prep:
+		rows.append(["이번 준비에 지음", "판매 시 전액"])
 	var y := r.position.y + 72
 	for row in rows:
 		_t(Vector2(r.position.x + 14, y), str(row[0]), 12, SUB, true)
@@ -2781,30 +3101,46 @@ func _inspector_layout(r: Rect2, mine: bool, prep: bool, lv: int) -> void:
 func _draw_wave_info(m: GMatch, top: float) -> void:
 	var groups := m.wave_plan()
 	var lanes := m.board.paths.size()
-	var lines := 0
+	var wide := lanes <= 2          # 입구가 적으면 이름까지, 많으면 그림과 수만
+	var per_lane: Array = []
+	var h := 52.0
 	for e in lanes:
-		var seen := {}
+		var counts := {}
+		var order := []
 		for g in groups:
 			if int(g[0]) == e:
-				seen[g[1]] = true
-		lines += seen.size()
-	var r := Rect2(1028, top, 236, 52 + lanes * 30 + lines * 24)
+				if not counts.has(g[1]):
+					order.append(g[1])
+				counts[g[1]] = int(counts.get(g[1], 0)) + int(g[2])
+		per_lane.append([order, counts])
+		h += 30.0 + (order.size() * 24.0 if wide else ceilf(order.size() / 3.0) * 26.0)
+	var r := Rect2(1028, top, 236, minf(h, 600.0 - top))
 	_card(r)
 	_t(r.position + Vector2(14, 14), "웨이브 %d" % m.wave, 15, INK, true)
 	_t(Vector2(r.end.x - 14, r.position.y + 17), "다음 적" if m.phase == "prep" else "진행 중", 11, AMBER, true, 2)
 	var y := r.position.y + 50
 	for e in lanes:
+		if y > r.end.y - 20:
+			break
 		_gate_badge(Vector2(r.position.x + 46, y + 11), e)
 		y += 30
-		var counts := {}
-		for g in groups:
-			if int(g[0]) == e:
-				counts[g[1]] = int(counts.get(g[1], 0)) + int(g[2])
-		for k in counts:
-			_enemy_icon(k, Rect2(r.position.x + 14, y - 4, 24, 24))
-			_t(Vector2(r.position.x + 44, y), str(GData.ENEMIES[k]["name"]), 12, INK, true)
-			_t(Vector2(r.end.x - 14, y), "×%d" % counts[k], 13, AMBER, true, 2)
-			y += 24
+		var order: Array = per_lane[e][0]
+		var counts: Dictionary = per_lane[e][1]
+		if wide:
+			for k in order:
+				_enemy_icon(k, Rect2(r.position.x + 14, y - 4, 24, 24))
+				_t(Vector2(r.position.x + 44, y), str(GData.ENEMIES[k]["name"]), 12, INK, true)
+				_t(Vector2(r.end.x - 14, y), "×%d" % counts[k], 13, AMBER, true, 2)
+				y += 24
+		else:
+			for i in order.size():
+				var k: String = order[i]
+				var x := r.position.x + 14 + (i % 3) * 72
+				if i > 0 and i % 3 == 0:
+					y += 26
+				_enemy_icon(k, Rect2(x, y - 4, 24, 24))
+				_t(Vector2(x + 26, y), "×%d" % counts[k], 12, AMBER, true)
+			y += 26 if not order.is_empty() else 0
 
 
 func _draw_result() -> void:

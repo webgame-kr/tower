@@ -91,7 +91,7 @@ func _init() -> void:
 
 
 func _rules() -> void:
-	ok(GData.lanes_for(2) == 2 and GData.lanes_for(3) == 3 and GData.lanes_for(4) == 3, "인원별 입구 수")
+	ok(GData.lanes_for(2) == 2 and GData.lanes_for(3) == 3 and GData.lanes_for(4) == 4, "인원별 입구 수")
 	for n in [2, 3, 4]:
 		var names := []
 		for i in n:
@@ -99,11 +99,11 @@ func _rules() -> void:
 		var m := GMatch.new(names)
 		ok(m.board.paths.size() == GData.lanes_for(n) and m.gate_dmg.size() == m.board.paths.size(), "%d인 입구와 기록" % n)
 		for e in m.board.paths.size():
-			ok(m.board.validate(e, m.board.paths[e], {}) == "", "%d인 %d번 길 유효" % [n, e + 1])
+			ok(m.board.validate(e, m.board.paths[e], {}, 0, m.cap()) == "", "%d인 %d번 길 유효" % [n, e + 1])
 		var copy := GMatch.new()
 		copy.load_data(JSON.parse_string(JSON.stringify(m.to_data())))
 		ok(copy.board.paths == m.board.paths and copy.gate_dmg.size() == m.gate_dmg.size(), "%d인 상태 동기화" % n)
-		ok(m.team_edits() == n * GData.EDITS_PER_PLAYER, "%d인 길 개조 기회는 사람당" % n)
+		ok(m.players.all(func(p): return int(p["mat"]) == GData.MAT_START), "%d인 공사 자재는 사람마다" % n)
 	var fast := GMatch.new(["A", "B", "C"])
 	fast.apply(0, {"op": "speed", "v": true})
 	fast.apply(1, {"op": "speed", "v": true})
@@ -116,7 +116,8 @@ func _rules() -> void:
 	var spots := 0
 	for i in four.board.paths[2].size():
 		for side in [1, -1]:
-			if four.board.reroute(2, i, "detour", side, {}).has("path"):
+			var cand := four.board.candidate(2, i, "detour", side)
+			if not cand.is_empty() and four.board.validate(2, cand, {}, 0, four.cap()) == "":
 				spots += 1
 	ok(spots >= 4, "3번 길에도 우회로 자리가 있음")
 	for k in 4:
@@ -168,8 +169,8 @@ func _online() -> void:
 	ok(host.start_match() == "", "4인 시작")
 	pump()
 	for g in guests:
-		ok(g.state == "game" and g.m.board.paths.size() == 3 and g.m.players.size() == 4, "손님에게 4인 경기 전달")
-	var spots := [Vector2i(1, 6), Vector2i(23, 6), Vector2i(15, 15)]
+		ok(g.state == "game" and g.m.board.paths.size() == 4 and g.m.players.size() == 4, "손님에게 4인 경기 전달")
+	var spots := [Vector2i(5, 2), Vector2i(19, 2), Vector2i(5, 12)]
 	for i in guests.size():
 		guests[i].command({"op": "build", "type": "gun", "x": spots[i].x, "y": spots[i].y})
 	pump()
@@ -193,12 +194,11 @@ func _online() -> void:
 
 
 func _balance_shape() -> void:
-	var two: Array = GData.wave_groups(3, 2)
-	var four: Array = GData.wave_groups(3, 4)
+	var two: Array = GData.make_wave(3, 2, 2, 7)
+	var four: Array = GData.make_wave(3, 4, 4, 7)
 	ok(_count(four) > _count(two), "인원이 늘면 적 물량 증가")
 	ok(GData.wave_hp(8, 4) > GData.wave_hp(8, 2), "인원이 늘면 적 체력 증가")
-	ok(GData.wave_groups(3) == two, "2인 웨이브는 그대로")
-	var boss := GData.wave_groups(5, 4).filter(func(g): return g[1] == "boss")
+	var boss := GData.make_wave(5, 4, 4, 7).filter(func(g): return GData.is_boss(g[1]))
 	ok(boss.size() == 1 and int(boss[0][2]) == 1, "보스는 한 마리 유지")
 
 

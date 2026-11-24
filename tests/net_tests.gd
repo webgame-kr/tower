@@ -67,14 +67,14 @@ func _init() -> void:
 	pump(h, c)
 	ok(c.state == "game" and c.m != null, "손님에게 경기 전달")
 
-	c.command({"op": "build", "type": "gun", "x": 3, "y": 4})
+	c.command({"op": "build", "type": "gun", "x": 3, "y": 2})
 	pump(h, c)
 	ok(h.m.towers.size() == 1 and c.m.towers.size() == 1, "손님 건설이 양쪽에 반영")
 	ok(h.m.players[1]["gold"] == GData.START_GOLD - 100 and c.m.players[1]["gold"] == GData.START_GOLD - 100, "골드는 호스트 기준")
 
 	# 승인 응답이 사라져 재전송돼도 두 번 결제되면 안 된다
 	a.drop_next = true
-	c.command({"op": "build", "type": "gun", "x": 4, "y": 4})
+	c.command({"op": "build", "type": "gun", "x": 4, "y": 2})
 	for _i in 60:
 		h.tick(0.05)
 		c.tick(0.05)
@@ -144,7 +144,7 @@ func _init() -> void:
 	ok(solo.m.players[1]["ready"] == true and solo.m.towers.size() > 0, "연습 동료가 준비")
 	solo.command({"op": "ready", "v": true})
 	ok(solo.m.phase == "combat", "연습 모드 전투 시작")
-	ok(int(solo.m.players[1]["edits"]) == GData.EDITS_PER_PLAYER, "연습 동료는 길을 직접 바꾸지 않음")
+	ok(int(solo.m.players[1]["mat"]) == GData.MAT_START, "연습 동료는 길을 직접 바꾸지 않음")
 	ok(solo.chat.any(func(r): return int(r["seat"]) == 1 and r.has("x")), "연습 동료가 길 변경을 핑으로 제안")
 	solo.command({"op": "speed", "v": true})
 	ok(solo.m.speed == 2, "혼자 연습에서는 2배가 바로 켜짐")

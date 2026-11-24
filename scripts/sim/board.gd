@@ -1,16 +1,14 @@
 class_name Board
 extends RefCounted
-## 격자와 적 경로. 길 조각 교체와 설치 유효성 검사를 맡는다.
+## 격자와 적 경로. 길 다시 그리기와 설치 유효성 검사를 맡는다.
 
 var paths: Array = []   # 입구별 Array[Vector2i]
+var opened := false     # 유령 숲의 막힌 땅이 열렸는지
 
 
 func _init(lanes := 2) -> void:
 	for raw in GData.BASE_PATHS.slice(0, lanes):
-		var p: Array = []
-		for c in raw:
-			p.append(Vector2i(int(c[0]), int(c[1])))
-		paths.append(p)
+		paths.append((raw as Array).duplicate())
 
 
 static func in_bounds(c: Vector2i) -> bool:
@@ -28,111 +26,138 @@ func is_path(c: Vector2i) -> bool:
 	return false
 
 
-func can_build(c: Vector2i, towers: Dictionary) -> String:
+func lane_of(c: Vector2i) -> int:
+	for e in paths.size():
+		if paths[e].has(c):
+			return e
+	return -1
+
+
+## 땅 자체가 막혀 있는지 (길과 포탑 공통). 연못은 테마에 따라 다르다.
+func ground_err(c: Vector2i, theme: int, for_road: bool) -> String:
 	if not in_bounds(c):
 		return "맵 밖이에요"
 	if is_castle(c):
-		return "성 자리예요"
+		return "본부 자리예요"
 	if GData.LANDMARK.has_point(c):
-		return "랜드마크 구역에는 지을 수 없어요"
-	if is_path(c):
-		return "길 위에는 지을 수 없어요"
-	if towers.has(c):
-		return "이미 포탑이 있어요"
+		return "랜드마크 구역이에요"
+	if GData.ROCKS.has(c):
+		return "바위가 있어요"
+	if not opened and GData.BLOCKED.has_point(c):
+		return "막힌 땅이에요 (유령 숲에서 열려요)"
+	if GData.is_pond(c):
+		var st := GData.pond_state(theme)
+		if st == "dry" or (st == "ice" and for_road):
+			return ""
+		if st == "ice":
+			return "얼음 위에는 길만 낼 수 있어요"
+		return "용암 웅덩이예요" if st == "lava" else "연못이에요"
 	return ""
 
 
-## 조각을 끼운 새 경로. 실패하면 {err}
-func reroute(e: int, i: int, kind: String, side: int, towers: Dictionary) -> Dictionary:
-	if e < 0 or e >= paths.size() or not GData.PIECES.has(kind) or abs(side) != 1:
-		return {"err": "잘못된 길 조각이에요"}
-	var p: Array = paths[e]
-	var span: int = GData.PIECES[kind]["span"]
-	var depth: int = GData.PIECES[kind]["depth"]
-	if i < 0 or i + span >= p.size():
-		return {"err": "이 구간에는 놓을 수 없어요"}
-	var a: Vector2i = p[i]
-	var b: Vector2i = p[i + span]
-	var dir: Vector2i = p[i + 1] - a
-	for j in range(1, span + 1):
-		if p[i + j] != a + dir * j:
-			return {"err": "곧은 구간에만 놓을 수 있어요"}
-	var n := Vector2i(-dir.y, dir.x) * side
-	var out: Array = p.slice(0, i + 1)
-	for k in range(1, depth + 1):
-		out.append(a + n * k)
-	for j in range(1, span + 1):
-		out.append(a + dir * j + n * depth)
-	for k in range(depth - 1, 0, -1):
-		out.append(b + n * k)
-	out.append_array(p.slice(i + span))
-	var err := validate(e, out, towers)
+## 포탑 설치 가능 여부. 가시 덫개 같은 함정은 길 칸에만 놓는다.
+func can_build(c: Vector2i, towers: Dictionary, theme := 0, trap := false) -> String:
+	if towers.has(c):
+		return "이미 포탑이 있어요"
+	if trap:
+		if not in_bounds(c) or not is_path(c):
+			return "함정은 길 칸에만 놓아요"
+		return ""
+	var err := ground_err(c, theme, false)
 	if err != "":
-		return {"err": err}
-	return {"path": out}
+		return err
+	if is_path(c):
+		return "길 위에는 지을 수 없어요"
+	if theme >= 3 and GData.near_crack(c):
+		return "용암 균열 옆에는 지을 수 없어요"
+	return ""
 
 
-## 기획서 5.4 설치 유효 조건
-func validate(e: int, path: Array, towers: Dictionary) -> String:
-	if path.size() > GData.MAX_PATH:
-		return "경로 길이 상한(%d칸)을 넘어요" % GData.MAX_PATH
+## A(i)~B(j) 사이를 trail 칸들로 바꾼 새 경로 (trail 은 A·B 를 뺀 중간 칸)
+func spliced(e: int, i: int, j: int, trail: Array) -> Array:
+	var p: Array = paths[e]
+	if i > j:
+		var t := i
+		i = j
+		j = t
+		trail = trail.duplicate()
+		trail.reverse()
+	var out: Array = p.slice(0, i + 1)
+	out.append_array(trail)
+	out.append_array(p.slice(j))
+	return out
+
+
+## 새 경로의 공사 자재 비용 (늘어난 칸 - 옛 도로 칸). 줄이면 음수 = 돌려받음
+func cost_of(e: int, path: Array, theme: int) -> int:
+	var old: Array = paths[e]
+	var free := 0
+	for c in path:
+		if not old.has(c) and GData.is_old_road(c, theme):
+			free += 1
+	return path.size() - old.size() - free
+
+
+## 기획서 유효 조건: 입구에서 시작, 본부까지 연결, 자기 교차 없음, 장애물·다른 길과 안 겹침.
+## blockers: 포탑 칸 -> 주인 (함정은 넣지 않는다)
+func validate(e: int, path: Array, blockers: Dictionary, theme: int, cap: int) -> String:
+	if path.size() > cap:
+		return "길이 상한(%d칸)을 넘어요" % cap
 	if path.is_empty() or path[0] != paths[e][0]:
 		return "입구와 이어지지 않아요"
 	var seen := {}
 	for idx in path.size():
 		var c: Vector2i = path[idx]
-		if not in_bounds(c):
-			return "맵 경계를 벗어나요"
-		if is_castle(c):
-			return "성과 겹쳐요"
-		if GData.LANDMARK.has_point(c):
-			return "랜드마크 구역과 겹쳐요"
-		if towers.has(c):
+		var err := ground_err(c, theme, true)
+		if err != "" and not paths[e].has(c):
+			return err
+		if blockers.has(c):
 			return "포탑과 겹쳐요"
 		if seen.has(c):
 			return "길이 자기 자신과 겹쳐요"
 		seen[c] = true
 		if idx > 0:
 			var step: Vector2i = c - path[idx - 1]
-			if abs(step.x) + abs(step.y) != 1:
+			if absi(step.x) + absi(step.y) != 1:
 				return "길이 끊겨요"
 		for other in paths.size():
 			if other != e and paths[other].has(c):
 				return "다른 입구의 길과 겹쳐요"
 	var last: Vector2i = path[path.size() - 1]
-	var touching := false
 	for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
 		if is_castle(last + d):
-			touching = true
-	return "" if touching else "성까지 이어지지 않아요"
+			return ""
+	return "본부까지 이어지지 않아요"
 
 
-## 마우스 위치에서 가장 그럴듯한 조각 자리. 없으면 {}
-func best_edit(mouse: Vector2, kind: String, towers: Dictionary, reach := 2.6) -> Dictionary:
-	var best := {}
-	var best_d := reach
-	for e in paths.size():
-		for i in paths[e].size():
-			for side in [1, -1]:
-				var r := reroute(e, i, kind, side, towers)
-				if r.has("err"):
-					continue
-				var center := _bulge_center(paths[e], r["path"])
-				var d := center.distance_to(mouse)
-				if d < best_d:
-					best_d = d
-					best = {"e": e, "i": i, "kind": kind, "side": side, "path": r["path"]}
-	return best
+## 봇·자동 감싸기용 후보: 곧은 구간을 ㄷ자(우회로) 또는 한쪽으로(굽잇길) 밀어낸 경로
+const SHAPES := {"detour": [2, 2], "bend": [3, 1], "wide": [4, 2], "deep": [2, 3]}
 
 
-func _bulge_center(old: Array, now: Array) -> Vector2:
-	var sum := Vector2.ZERO
-	var n := 0
-	for c in now:
-		if not old.has(c):
-			sum += Vector2(c) + Vector2(0.5, 0.5)
-			n += 1
-	return sum / max(n, 1)
+func candidate(e: int, i: int, kind: String, side: int) -> Array:
+	if e < 0 or e >= paths.size() or not SHAPES.has(kind) or absi(side) != 1:
+		return []
+	var p: Array = paths[e]
+	var span: int = SHAPES[kind][0]
+	var depth: int = SHAPES[kind][1]
+	if i < 0 or i + span >= p.size():
+		return []
+	var a: Vector2i = p[i]
+	var b: Vector2i = p[i + span]
+	var dir: Vector2i = p[i + 1] - a
+	for j in range(1, span + 1):
+		if p[i + j] != a + dir * j:
+			return []
+	var n := Vector2i(-dir.y, dir.x) * side
+	var trail: Array = []
+	for k in range(1, depth + 1):
+		trail.append(a + n * k)
+	for j in range(1, span):
+		trail.append(a + dir * j + n * depth)
+	trail.append(b + n * depth)
+	for k in range(depth - 1, 0, -1):
+		trail.append(b + n * k)
+	return spliced(e, i, i + span, trail)
 
 
 ## 사거리 안에 들어오는 길 칸 수 (길 효율 미리보기)
@@ -157,18 +182,26 @@ static func pos_on(path: Array, dist: float) -> Vector2:
 func to_data() -> Array:
 	var out := []
 	for p in paths:
-		var flat := []
-		for c in p:
-			flat.append(c.x)
-			flat.append(c.y)
-		out.append(flat)
+		out.append(flat(p))
 	return out
+
+
+static func flat(p: Array) -> Array:
+	var f := []
+	for c in p:
+		f.append(c.x)
+		f.append(c.y)
+	return f
+
+
+static func unflat(f: Array) -> Array:
+	var p: Array = []
+	for k in range(0, f.size() - 1, 2):
+		p.append(Vector2i(int(f[k]), int(f[k + 1])))
+	return p
 
 
 func load_data(d: Array) -> void:
 	paths = []
-	for flat in d:
-		var p: Array = []
-		for k in range(0, flat.size(), 2):
-			p.append(Vector2i(int(flat[k]), int(flat[k + 1])))
-		paths.append(p)
+	for f in d:
+		paths.append(unflat(f))

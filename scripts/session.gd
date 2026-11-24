@@ -77,9 +77,13 @@ func start_match() -> String:
 
 func _begin() -> void:
 	var names := []
+	var kits := []
 	for s in seats:
 		names.append(s["name"])
-	m = GMatch.new(names)
+		kits.append(s.get("kit", GData.DEFAULT_KIT))
+	if solo and seats.size() > 1:      # 연습 동료는 사람과 겹치지 않는 포탑을 든다
+		kits[1] = GBot.pick_kit(kits[0])
+	m = GMatch.new(names, kits)
 	for i in seats.size():
 		m.players[i]["online"] = seats[i]["online"]
 		m.players[i]["col"] = seats[i]["col"]
@@ -117,6 +121,11 @@ func _apply_seat(s: int, d: Dictionary) -> void:
 			seats[s]["col"] = c
 	if d.has("ready"):
 		seats[s]["ready"] = bool(d["ready"])
+	if d.has("kit") and GMatch.kit_ok(d["kit"]):
+		var kit: Array = []
+		for t in d["kit"]:
+			kit.append(str(t))
+		seats[s]["kit"] = kit
 	if net and not solo:
 		net.broadcast(_lobby_data())
 
@@ -197,13 +206,10 @@ func _host_tick(delta: float) -> void:
 
 ## 연습 동료는 길을 직접 바꾸지 않고, 미리보기와 핑·채팅으로 제안한다
 func _bot_suggest(e: Dictionary) -> void:
-	var r := m.board.reroute(int(e["e"]), int(e["i"]), str(e["kind"]), int(e["side"]), m.tower_cells())
-	if not r.has("path"):
-		return
 	var old: Array = m.board.paths[int(e["e"])]
 	var sum := Vector2.ZERO
 	var n := 0
-	for c in r["path"]:
+	for c in e["path"]:
 		if not old.has(c):
 			sum += Vector2(c) + Vector2(0.5, 0.5)
 			n += 1
@@ -213,7 +219,7 @@ func _bot_suggest(e: Dictionary) -> void:
 	_ping_times.erase(1)
 	_ping(1, {"kind": "road", "x": at.x, "y": at.y})
 	_add_chat({"seat": 1, "col": seats[1]["col"], "name": seats[1]["name"],
-		"text": "%s 이렇게 돌리면 포탑이 더 오래 쏴요. 좋으면 길 조각 패널에서 확정해 주세요" % GData.PIECES[str(e["kind"])]["name"]})
+		"text": "길을 이렇게 다시 그리면 포탑이 더 오래 쏴요 (자재 %d). 좋으면 E 로 확정해 주세요" % int(e.get("cost", 0))})
 
 
 func _any_relay() -> bool:
@@ -249,7 +255,7 @@ func _push_state() -> void:
 func _lobby_data() -> Dictionary:
 	var names := []
 	for s in seats:
-		names.append({"name": s["name"], "online": s["online"], "col": s["col"], "ready": s["ready"]})
+		names.append({"name": s["name"], "online": s["online"], "col": s["col"], "ready": s["ready"], "kit": s.get("kit", GData.DEFAULT_KIT)})
 	return {"t": "lobby", "seats": names}
 
 
@@ -475,7 +481,10 @@ func _client_msg(from: String, d: Dictionary) -> void:
 		"lobby":
 			seats = []
 			for s in d["seats"]:
-				seats.append({"peer": "", "token": "", "name": str(s["name"]), "online": bool(s["online"]), "col": int(s["col"]), "ready": bool(s["ready"])})
+				var kit: Array = []
+				for t in s.get("kit", GData.DEFAULT_KIT):
+					kit.append(str(t))
+				seats.append({"peer": "", "token": "", "name": str(s["name"]), "online": bool(s["online"]), "col": int(s["col"]), "ready": bool(s["ready"]), "kit": kit})
 		"st":
 			if m == null:
 				m = GMatch.new()

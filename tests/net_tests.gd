@@ -70,7 +70,7 @@ func _init() -> void:
 	c.command({"op": "build", "type": "gun", "x": 3, "y": 4})
 	pump(h, c)
 	ok(h.m.towers.size() == 1 and c.m.towers.size() == 1, "손님 건설이 양쪽에 반영")
-	ok(h.m.players[1]["gold"] == GData.START_GOLD - 60 and c.m.players[1]["gold"] == GData.START_GOLD - 60, "골드는 호스트 기준")
+	ok(h.m.players[1]["gold"] == GData.START_GOLD - 100 and c.m.players[1]["gold"] == GData.START_GOLD - 100, "골드는 호스트 기준")
 
 	# 승인 응답이 사라져 재전송돼도 두 번 결제되면 안 된다
 	a.drop_next = true
@@ -80,7 +80,7 @@ func _init() -> void:
 		c.tick(0.05)
 		a.drop_next = false
 	ok(h.m.towers.size() == 2, "재전송해도 포탑 하나만 건설")
-	ok(h.m.players[1]["gold"] == GData.START_GOLD - 120, "재전송해도 한 번만 결제")
+	ok(h.m.players[1]["gold"] == GData.START_GOLD - 200, "재전송해도 한 번만 결제")
 	ok(c.outbox.is_empty(), "재전송 후 승인 수신")
 
 	c.command({"op": "chat", "text": "<b>안녕</b>"})

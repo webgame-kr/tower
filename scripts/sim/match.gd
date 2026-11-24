@@ -203,8 +203,8 @@ func _ability(seat: int, c: Dictionary) -> String:
 	players[seat]["used"] = true
 	players[seat]["support"] += 1
 	for en in enemies:
-		if _pos(en).distance_to(at) <= 2.2:
-			_chill(en, 0.5, 3.0, seat)
+		if _pos(en).distance_to(at) <= GData.ABILITY_RADIUS:
+			_chill(en, GData.ABILITY_SLOW, GData.ABILITY_TIME, seat)
 	fx.append({"k": "ability", "x": at.x, "y": at.y, "o": seat})
 	version += 1
 	return ""
@@ -292,8 +292,24 @@ func _fire(dt: float) -> void:
 			continue
 		t["cd"] = float(s["cd"])
 		var hit_at := _pos(target)
-		fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": hit_at.x, "ty2": hit_at.y, "r": s["splash"]})
 		var owner := int(t["owner"])
+		if bool(s["aura"]):      # 범위 안 전부
+			fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": at.x, "ty2": at.y, "r": s["range"]})
+			for en in enemies.duplicate():
+				if _pos(en).distance_to(at) <= float(s["range"]):
+					_hurt(en, s, owner)
+			continue
+		if bool(s["line"]):      # 사거리 끝까지 일직선 관통
+			var dir := (hit_at - at).normalized()
+			var tip := at + dir * float(s["range"])
+			fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": tip.x, "ty2": tip.y, "r": 0.0})
+			for en in enemies.duplicate():
+				var rel := _pos(en) - at
+				var along := rel.dot(dir)
+				if en == target or (along >= 0.0 and along <= float(s["range"]) and absf(rel.cross(dir)) <= 0.45):
+					_hurt(en, s, owner)
+			continue
+		fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": hit_at.x, "ty2": hit_at.y, "r": s["splash"]})
 		if float(s["splash"]) > 0.0:
 			for en in enemies.duplicate():
 				if _pos(en).distance_to(hit_at) <= float(s["splash"]):

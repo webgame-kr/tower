@@ -1180,7 +1180,7 @@ func _draw_fx() -> void:
 						draw_circle(b, float(f["r"]) * CELL, Color(ICE, k * 0.16))
 			"ability":
 				var c := _p(f["a"] * 1.0)
-				var rr := 2.2 * CELL
+				var rr := GData.ABILITY_RADIUS * CELL
 				draw_circle(c, rr, Color(ICE, k * 0.3))
 				_dash_ring(c, rr * (1.15 - k * 0.15), Color.WHITE, 2.4, k)
 			"hit":
@@ -1237,9 +1237,10 @@ func _draw_cursor(m: GMatch) -> void:
 			_tip(center + Vector2(0, -CELL * 0.95), "사거리 안 길 %d칸" % Board.coverage(c, float(st["range"]), m.board.paths))
 	elif mode == "ability":
 		var p := _p(hover)
-		draw_circle(p, 2.2 * CELL, Color(ICE, 0.18))
-		_dash_ring(p, 2.2 * CELL, Color.WHITE, 2.4)
-		_tip(p + Vector2(0, 2.2 * CELL + 16), "긴급 냉각 · 클릭해서 사용 · 3초 · 감속 50%")
+		var rr := GData.ABILITY_RADIUS * CELL
+		draw_circle(p, rr, Color(ICE, 0.18))
+		_dash_ring(p, rr, Color.WHITE, 2.4)
+		_tip(p + Vector2(0, rr + 16), "긴급 냉각 · 반경 %.1f칸 · %d초 · 감속 %d%%" % [GData.ABILITY_RADIUS, int(GData.ABILITY_TIME), roundi(GData.ABILITY_SLOW * 100)])
 	elif mode.begins_with("ping:"):
 		draw_arc(_p(hover), CELL * 0.5, 0, TAU, 20, AMBER, 2.0, true)
 	elif mode == "":
@@ -1539,14 +1540,17 @@ func _draw_inspector(m: GMatch) -> void:
 	_t(Vector2(1160, 125), "%s · %d단계" % [str(m.players[int(t["owner"])]["name"]).left(5), int(t["lv"])], 12, SUB)
 	var st := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
 	var rows := [["피해", "%.0f" % st["dmg"]], ["사거리", "%.1f칸" % st["range"]], ["공격 간격", "%.2f초" % st["cd"]]]
+	if t["type"] == "cold":
+		rows = [["감속", "%d%% · 상한 60%%" % roundi(st["slow"] * 100)], ["범위" if st["aura"] else "사거리", "%.1f칸" % st["range"]],
+			["대상", "범위 안 전부" if st["aura"] else "한 대상"], ["공격 간격", "%.2f초" % st["cd"]]]
 	if st["splash"] > 0.0:
-		rows.append(["폭발 반경" if t["type"] == "cannon" else "범위", "%.1f칸" % st["splash"]])
-	if st["slow"] > 0.0:
-		rows.append(["감속", "%d%% · 상한 60%%" % roundi(st["slow"] * 100)])
+		rows.append(["폭발 반경", "%.1f칸" % st["splash"]])
+	if st["line"]:
+		rows.append(["공격", "일직선 관통"])
 	if st["pierce"] > 0.0:
-		rows.append(["방어 관통", "%.0f" % st["pierce"]])
+		rows.append(["방어 무시", "%.0f" % st["pierce"]])
 	var y := 158.0
-	var limit := 5 if int(t["lv"]) >= 3 else 4
+	var limit := 5 if int(t["lv"]) >= 3 else 4   # 3단계는 강화 버튼이 없어 한 줄 더 들어간다
 	for i in mini(rows.size(), limit):
 		_t(Vector2(1066, y), rows[i][0], 12, SUB)
 		_t(Vector2(1250, y), rows[i][1], 12, INK, true, 2)

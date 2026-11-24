@@ -5,17 +5,20 @@ extends RefCounted
 const W := 27
 const H := 18
 const CASTLE := Rect2i(12, 7, 3, 3)
-const MAX_PATH := 36
+const MAX_PATH := 30
 const LAST_WAVE := 6          # 1단계 내부 검증 구간
 const THEME_LEN := 5          # 이 웨이브마다 테마 경계 (길 개조 기회 재지급)
 const CASTLE_HP := 100
-const START_GOLD := 220
+const START_GOLD := 320
 const EDITS_PER_THEME := 2
 const SELL_RATE := 0.8
 const SLOW_CAP := 0.6
+const ABILITY_RADIUS := 1.5
+const ABILITY_TIME := 3.0
+const ABILITY_SLOW := 0.4
 const MAX_ALIVE := 60
 const TICK := 0.05
-static var hp_mul := 3.5     # 적 체력 배율 (밸런스 조정용)
+static var hp_mul := 2.0     # 적 체력 배율 (밸런스 조정용)
 
 const BASE_PATHS := [
 	[[0, 8], [1, 8], [2, 8], [3, 8], [4, 8], [4, 7], [4, 6], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [8, 6], [8, 7], [8, 8], [9, 8], [10, 8], [11, 8]],
@@ -29,29 +32,29 @@ const PIECES := {
 
 const TOWERS := {
 	"gun": {
-		"name": "기관포탑", "cost": 60, "up": [70, 120],
-		"lv": [{"dmg": 5.0, "cd": 0.4, "range": 3.0}, {"dmg": 8.0, "cd": 0.36, "range": 3.2}],
-		"a": {"label": "속사", "dmg": 9.0, "cd": 0.2, "range": 3.2},
-		"b": {"label": "철갑탄", "dmg": 24.0, "cd": 0.5, "range": 3.6, "pierce": 6.0},
+		"name": "기관포탑", "cost": 100, "up": [80, 120],
+		"lv": [{"dmg": 5.0, "cd": 0.3, "range": 3.0}, {"dmg": 8.0, "cd": 0.3, "range": 3.0}],
+		"a": {"label": "회전 4연장", "dmg": 8.0, "cd": 0.15, "range": 3.0},
+		"b": {"label": "관통 장포신", "dmg": 18.0, "cd": 0.45, "range": 3.6, "pierce": 6.0, "line": true},
 	},
 	"cannon": {
-		"name": "대포탑", "cost": 90, "up": [90, 150],
-		"lv": [{"dmg": 14.0, "cd": 1.5, "range": 3.4, "splash": 1.2}, {"dmg": 22.0, "cd": 1.4, "range": 3.6, "splash": 1.3}],
-		"a": {"label": "폭발 범위 확대", "dmg": 28.0, "cd": 1.4, "range": 3.6, "splash": 2.1},
-		"b": {"label": "좁은 범위 고피해", "dmg": 62.0, "cd": 1.5, "range": 3.8, "splash": 0.9},
+		"name": "대포탑", "cost": 150, "up": [120, 180],
+		"lv": [{"dmg": 16.0, "cd": 1.6, "range": 2.5, "splash": 1.0}, {"dmg": 24.0, "cd": 1.6, "range": 2.5, "splash": 1.0}],
+		"a": {"label": "폭발 범위 확대", "dmg": 24.0, "cd": 1.6, "range": 2.5, "splash": 1.6},
+		"b": {"label": "좁은 범위 고피해", "dmg": 52.0, "cd": 1.6, "range": 2.5, "splash": 1.0},
 	},
 	"cold": {
-		"name": "냉각탑", "cost": 70, "up": [60, 100],
-		"lv": [{"dmg": 1.0, "cd": 1.0, "range": 2.6, "splash": 1.0, "slow": 0.3}, {"dmg": 2.0, "cd": 0.9, "range": 2.9, "splash": 1.1, "slow": 0.38}],
-		"a": {"label": "강한 냉각", "dmg": 2.0, "cd": 0.8, "range": 2.9, "splash": 1.1, "slow": 0.55},
-		"b": {"label": "넓은 냉기", "dmg": 3.0, "cd": 0.9, "range": 3.8, "splash": 1.9, "slow": 0.4},
+		"name": "냉각탑", "cost": 120, "up": [100, 140],
+		"lv": [{"dmg": 1.0, "cd": 1.0, "range": 2.0, "slow": 0.3, "aura": true}, {"dmg": 2.0, "cd": 0.8, "range": 2.0, "slow": 0.3, "aura": true}],
+		"a": {"label": "냉기 장막", "dmg": 2.0, "cd": 0.8, "range": 3.0, "slow": 0.3, "aura": true},
+		"b": {"label": "얼음 송곳", "dmg": 6.0, "cd": 0.8, "range": 2.0, "slow": 0.55},
 	},
 }
 
 const ENEMIES := {
 	"grunt": {"name": "일반병", "hp": 34.0, "armor": 0.0, "speed": 1.25, "hit": 1},
 	"swarm": {"name": "떼거리", "hp": 13.0, "armor": 0.0, "speed": 1.6, "hit": 1},
-	"heavy": {"name": "중장갑", "hp": 120.0, "armor": 4.0, "speed": 0.8, "hit": 3},
+	"heavy": {"name": "중장갑", "hp": 120.0, "armor": 4.0, "speed": 0.8, "hit": 1},
 	"rusher": {"name": "돌격병", "hp": 42.0, "armor": 0.0, "speed": 2.4, "hit": 1},
 	"boss": {"name": "초원 대장", "hp": 900.0, "armor": 3.0, "speed": 0.62, "hit": 15},
 }
@@ -72,7 +75,7 @@ const PING_KINDS := {
 
 
 static func wave_gold(wave: int) -> int:
-	return 90 + wave * 15
+	return 120 + wave * 20
 
 
 ## 지금 단계의 포탑 능력치
@@ -86,4 +89,5 @@ static func tower_stats(type: String, level: int, branch: String) -> Dictionary:
 	return {
 		"dmg": float(s.get("dmg", 0.0)), "cd": float(s.get("cd", 1.0)), "range": float(s.get("range", 3.0)),
 		"splash": float(s.get("splash", 0.0)), "slow": float(s.get("slow", 0.0)), "pierce": float(s.get("pierce", 0.0)),
+		"aura": bool(s.get("aura", false)), "line": bool(s.get("line", false)),
 	}

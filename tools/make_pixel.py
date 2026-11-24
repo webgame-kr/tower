@@ -161,7 +161,7 @@ LAYOUTS = {
            "lanes": [(0, 1), (0, 11)], "extra": (19, 0), "blocked": None, "ponds": [],
            "decor": [((2, 3), "barrel"), ((2, 7), "crate"), ((12, 3), "crate"), ((13, 8), "lamp"), ((6, 12), "container"),
                      ((1, 6), "rock"), ((11, 10), "rock"), ((19, 10), "rock"), ((8, 0), "rock")]},
-    "v4": {"k": 30 / 19, "o": (168, 73), "W": 25, "H": 15, "castle": (11, 6), "landmark": (11, 0),
+    "v4": {"k": 2.0, "o": (82, 32), "W": 25, "H": 15, "castle": (11, 6), "landmark": (11, 0),
            "lanes": [(0, 1), (24, 1), (0, 13), (24, 13)], "extra": (12, 14), "blocked": (11, 11, 3, 4),
            "ponds": [(1, 6, 3, 3), (21, 6, 3, 3)],
            "decor": [((5, 7), "rock"), ((19, 7), "rock"), ((8, 0), "rock"), ((9, 0), "rock"), ((15, 0), "rock"), ((16, 0), "rock"),
@@ -208,26 +208,37 @@ for lname, L in LAYOUTS.items():
         for y in range(inner[1], inner[3]):
             for x in range(inner[0], inner[2]):
                 bp[x, y] = P[0] + (255,)
-        for _ in range(40):      # 큰 얼룩
-            cx, cy = rnd.randrange(inner[0], inner[2]), rnd.randrange(inner[1], inner[3])
-            rx, ry = rnd.randrange(10, 34), rnd.randrange(6, 20)
-            c2 = P[1] if rnd.random() < 0.6 else P[2]
-            for y in range(cy - ry, cy + ry):
-                for x in range(cx - rx, cx + rx):
-                    if inner[0] <= x < inner[2] and inner[1] <= y < inner[3] and ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1 - rnd.random() * 0.15:
-                        bp[x, y] = c2 + (255,)
-        for _ in range(gw * gh // 40):      # 풀 점
-            x, y = rnd.randrange(inner[0], inner[2]), rnd.randrange(inner[1], inner[3])
-            bp[x, y] = shade(P[rnd.randrange(3)], 0.85 if rnd.random() < 0.5 else 1.12) + (255,)
-        for (px_, py_, pw, ph) in L["ponds"]:      # 연못: 테마마다 물·얼음·마른 땅·용암
-            cx, cy = ox + (px_ + pw / 2) * T, oy + (py_ + ph / 2) * T
-            rx, ry = pw * T / 2 - 1, ph * T / 2 - 2
-            for y in range(int(cy - ry), int(cy + ry)):
-                for x in range(int(cx - rx), int(cx + rx)):
-                    d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
-                    if d < 1:
-                        c3 = shade(POND[theme], 0.7) if d > 0.82 else (shade(POND[theme], 1.15) if d < 0.25 and (x + y) % 5 == 0 else POND[theme])
-                        bp[x, y] = c3 + (255,)
+        for ty in range(-1, L["H"] + 1):      # 칸마다 풀 한두 포기·자갈 (둥근 얼룩 없음)
+            for tx in range(-1, L["W"] + 1):
+                for _ in range(rnd.randint(1, 2)):
+                    x = ox + tx * T + rnd.randint(2, T - 4)
+                    y = oy + ty * T + rnd.randint(3, T - 3)
+                    if not (inner[0] <= x < inner[2] - 2 and inner[1] + 2 <= y < inner[3]):
+                        continue
+                    if rnd.random() < 0.7:      # 풀 포기: ^ 모양 3픽셀
+                        c4 = shade(P[2], 0.86)
+                        bp[x, y] = c4 + (255,)
+                        bp[x + 1, y - 1] = c4 + (255,)
+                        bp[x + 2, y] = c4 + (255,)
+                    else:      # 자갈 2픽셀
+                        c4 = shade(P[1], 1.18)
+                        bp[x, y] = c4 + (255,)
+                        bp[x + 1, y] = shade(P[2], 0.8) + (255,)
+        for (px_, py_, pw, ph) in L["ponds"]:      # 연못: 모서리 3픽셀 깎은 사각형, 물결 가로선 3개
+            x0, y0 = ox + px_ * T + 2, oy + py_ * T + 2
+            x1, y1 = ox + (px_ + pw) * T - 2, oy + (py_ + ph) * T - 2
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    cut = min(y - y0, y1 - 1 - y)
+                    if min(x - x0, x1 - 1 - x) + cut < 3:
+                        continue
+                    edge = min(x - x0, x1 - 1 - x, y - y0, y1 - 1 - y) == 0 or min(x - x0, x1 - 1 - x) + cut == 3
+                    bp[x, y] = (shade(POND[theme], 0.6) if edge else POND[theme]) + (255,)
+            for i in range(3):
+                wy = y0 + (y1 - y0) * (i + 1) // 4
+                wx = x0 + 8 + (i % 2) * 14
+                for x in range(wx, min(wx + 5, x1 - 3)):
+                    bp[x, wy] = shade(POND[theme], 1.3) + (255,)
         over = Image.new("RGBA", size, (0, 0, 0, 0))
         stand = []
         col = THEME_COL[theme]

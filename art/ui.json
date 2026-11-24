@@ -1,0 +1,110 @@
+{
+ "panel_steel": {
+  "rect": [
+   0,
+   0,
+   32,
+   32
+  ],
+  "margin": 10
+ },
+ "panel_dark": {
+  "rect": [
+   32,
+   0,
+   32,
+   32
+  ],
+  "margin": 10
+ },
+ "panel_well": {
+  "rect": [
+   64,
+   0,
+   32,
+   32
+  ],
+  "margin": 6
+ },
+ "panel_amber": {
+  "rect": [
+   96,
+   0,
+   32,
+   32
+  ],
+  "margin": 6
+ },
+ "btn_normal": {
+  "rect": [
+   0,
+   32,
+   32,
+   36
+  ],
+  "margin": 8
+ },
+ "btn_pressed": {
+  "rect": [
+   32,
+   32,
+   32,
+   36
+  ],
+  "margin": 8
+ },
+ "btn_amber": {
+  "rect": [
+   64,
+   32,
+   32,
+   36
+  ],
+  "margin": 8
+ },
+ "btn_amber_pressed": {
+  "rect": [
+   96,
+   32,
+   32,
+   36
+  ],
+  "margin": 8
+ },
+ "btn_disabled": {
+  "rect": [
+   128,
+   32,
+   32,
+   36
+  ],
+  "margin": 8
+ },
+ "btn_hover": {
+  "rect": [
+   160,
+   32,
+   32,
+   36
+  ],
+  "margin": 8
+ },
+ "seg_cells": {
+  "rect": [
+   128,
+   0,
+   72,
+   16
+  ],
+  "margin": 0
+ },
+ "hazard": {
+  "rect": [
+   200,
+   0,
+   32,
+   8
+  ],
+  "margin": 0
+ }
+}

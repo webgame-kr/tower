@@ -185,7 +185,11 @@ func _ready() -> void:
 	add_child(net)
 	web = OS.has_feature("web") and net.available
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST      # 픽셀 아트는 번지지 않게
+	# 픽셀 아트: 창 크기에 따라 배율이 정수가 아니어도 도트가 고르게 (도트 경계만 1픽셀 섞기)
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	var mat := ShaderMaterial.new()
+	mat.shader = preload("res://shaders/pixel.gdshader")
+	material = mat
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	stage = Control.new()
 	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE

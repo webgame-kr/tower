@@ -17,6 +17,7 @@ func _init() -> void:
 	_economy()
 	_flow()
 	_towers()
+	_themes()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -135,6 +136,51 @@ func _towers() -> void:
 	var one := GMatch.new(["A", "B"])
 	one.apply(0, {"op": "ability", "x": 1.0, "y": 1.0})
 	ok(GData.ABILITY_RADIUS == 1.5 and GData.ABILITY_SLOW == 0.4, "긴급 냉각 시안 수치")
+
+
+func _themes() -> void:
+	ok(GData.theme_of(5) == 0 and GData.theme_of(6) == 1 and GData.theme_of(21) == 4 and GData.theme_of(25) == 4, "5웨이브마다 테마 전환")
+	var m := GMatch.new(["A", "B"])
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 19, "y": 3}) != "", "랜드마크 구역 건설 불가")
+	for e in 2:
+		for c in m.board.paths[e]:
+			ok(not GData.LANDMARK.has_point(c), "기본 길은 랜드마크와 겹치지 않음")
+	var spots := [0, 0]
+	for e in 2:
+		for i in m.board.paths[e].size():
+			for side in [1, -1]:
+				if m.board.reroute(e, i, "detour", side, {}).has("path"):
+					spots[e] += 1
+	ok(spots[0] >= 6 and spots[1] >= 6, "랜드마크가 있어도 우회로 자리가 충분함")
+	m.apply(0, {"op": "build", "type": "gun", "x": 19, "y": 10})
+	var id: int = m.towers.keys()[0]
+	var before: Array = m.board.paths.duplicate(true)
+	var base := m.tower_range(m.towers[id])
+	m.wave = 11
+	ok(is_equal_approx(m.tower_range(m.towers[id]), base * GData.SAND_RANGE), "사막 모래바람은 구역 안 포탑 사거리 감소")
+	ok(m.board.paths == before and int(m.towers[id]["owner"]) == 0, "테마가 바뀌어도 길과 포탑 유지")
+	m.wave = 6
+	m.phase = "combat"
+	m.enemies = [_enemy(1, 7.0)]
+	m.enemies[0]["dist"] = 8.0
+	m._move_enemies(1.0)
+	ok(is_equal_approx(float(m.enemies[0]["dist"]), 8.0 + 1.25 * GData.ICE_SPEED), "설원 빙판은 적 가속")
+	m.wave = 16
+	m.enemies = [_enemy(1, 12.0)]
+	m._move_enemies(1.0)
+	ok(float(m.enemies[0]["hp"]) < 100.0, "화산 용암은 적에게 지속 피해")
+	m.wave = 21
+	var ghost := _enemy(3, 2.0)
+	m.time = GData.GHOST_CYCLE - 3 * 0.37
+	ok(m.is_ghost(ghost), "유령 상태 판정")
+	m.enemies = [ghost]
+	ok(m._pick(Vector2(2.5, 8.5), 9.0, "first").is_empty(), "유령은 조준 불가")
+	m.time = 2.5
+	ok(not m.is_ghost(ghost) and not m._pick(Vector2(2.5, 8.5), 9.0, "first").is_empty(), "실체화되면 조준 가능")
+	var late: Array = GData.wave_groups(25)
+	ok(late.any(func(g): return g[1] == "boss"), "테마 마지막 웨이브에 보스")
+	var row: Array = GMatch.new(["A", "B"]).enemies_data()
+	ok(row.is_empty(), "빈 적 목록 직렬화")
 
 
 func _enemy(id: int, dist: float) -> Dictionary:

@@ -343,7 +343,7 @@ func _ping(s: int, c: Dictionary) -> String:
 	_add_ping(row)
 	if net and not solo:
 		net.broadcast({"t": "ping", "p": row})
-	_add_chat({"seat": s, "name": seats[s]["name"], "text": "[%s] %s" % [place_name(x, y), GData.PING_KINDS[kind]], "x": x, "y": y})
+	_add_chat({"seat": s, "name": seats[s]["name"], "text": GData.PING_KINDS[kind], "x": x, "y": y})
 	return ""
 
 
@@ -366,19 +366,31 @@ func _system(text: String) -> void:
 
 
 func place_name(x: float, y: float) -> String:
+	var at := Vector2(x, y)
 	if m:
-		var at := Vector2(x, y)
-		var best := 2.0
-		var lane := -1
+		var best := 4.0
+		var label := ""
+		var points := [[GData.CASTLE.get_center(), "본부 옆"]]
+		var theme: Dictionary = GData.THEMES[GData.theme_of(m.wave)]
+		points.append([Vector2(GData.LANDMARK.position) + Vector2(GData.LANDMARK.size) * 0.5, "%s 옆" % theme["landmark"]])
 		for e in m.board.paths.size():
-			for c in m.board.paths[e]:
-				var d := at.distance_to(Vector2(c) + Vector2(0.5, 0.5))
-				if d < best:
-					best = d
-					lane = e
-		if lane >= 0:
-			return "%d번 입구 길" % (lane + 1)
-	return "%d열 %d행" % [int(x) + 1, int(y) + 1]
+			var p: Array = m.board.paths[e]
+			points.append([Vector2(p[0]) + Vector2(0.5, 0.5), "%d번 입구 옆" % (e + 1)])
+			var bend := 0
+			for i in range(1, p.size() - 1):
+				if p[i] - p[i - 1] != p[i + 1] - p[i]:
+					points.append([Vector2(p[i]) + Vector2(0.5, 0.5), "%d번 길 굽이 %s" % [e + 1, "가나다라마바사아자차"[bend % 10]]])
+					bend += 1
+		for pt in points:
+			var d := at.distance_to(Vector2(pt[0]))
+			if d <= best:
+				best = d
+				label = pt[1]
+		if label != "":
+			return label
+	var col := clampi(int(x / (GData.W / 4.0)), 0, 3)
+	var row := clampi(int(y / (GData.H / 3.0)), 0, 2)
+	return "%s%d 구역" % ["가나다라"[col], row + 1]
 
 
 ## 내 조작. 호스트는 바로 판정하고 손님은 요청을 보낸다.

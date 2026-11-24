@@ -96,7 +96,7 @@ func _init() -> void:
 	c.command({"op": "ping", "kind": "danger", "x": 3.5, "y": 8.5})
 	pump(h, c)
 	ok(c.pings.size() == 1 and h.pings.size() == 1, "핑 양쪽 표시")
-	ok(str(c.chat[-1]["text"]).contains("1번 입구 길"), "핑이 위치와 함께 채팅에 기록")
+	ok(c.chat[-1].has("x") and c.place_name(float(c.chat[-1]["x"]), float(c.chat[-1]["y"])).contains("1번"), "핑이 좌표와 함께 채팅에 기록")
 
 	# 손님이 끊겼다가 돌아오면 자리와 골드를 되찾는다
 	var gold: int = h.m.players[1]["gold"]

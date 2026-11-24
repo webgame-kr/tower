@@ -3,7 +3,7 @@ extends SceneTree
 
 
 func _init() -> void:
-	for mul in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]:
+	for mul in [1.5, 2.0, 2.5]:
 		GData.hp_mul = mul
 		print("체력 x%.1f | 포탑만: %s | 포탑+길: %s" % [mul, _run(false), _run(true)])
 	quit()

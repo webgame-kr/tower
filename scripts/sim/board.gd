@@ -33,6 +33,8 @@ func can_build(c: Vector2i, towers: Dictionary) -> String:
 		return "맵 밖이에요"
 	if is_castle(c):
 		return "성 자리예요"
+	if GData.LANDMARK.has_point(c):
+		return "랜드마크 구역에는 지을 수 없어요"
 	if is_path(c):
 		return "길 위에는 지을 수 없어요"
 	if towers.has(c):
@@ -83,6 +85,8 @@ func validate(e: int, path: Array, towers: Dictionary) -> String:
 			return "맵 경계를 벗어나요"
 		if is_castle(c):
 			return "성과 겹쳐요"
+		if GData.LANDMARK.has_point(c):
+			return "랜드마크 구역과 겹쳐요"
 		if towers.has(c):
 			return "포탑과 겹쳐요"
 		if seen.has(c):

@@ -13,45 +13,15 @@ func _initialize() -> void:
 
 
 func _save(name_: String) -> void:
-	for _i in 6:
+	for _i in 8:
 		await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png(out.path_join(name_ + ".png"))
 	print("saved ", name_)
 
 
-func _run() -> void:
-	g = load("res://scenes/main.tscn").instantiate()
-	root.add_child(g)
-	await _save("menu")
-
-	var lobby := GSession.new(null, "민수", "a")
-	lobby.open_host()
-	lobby.seats.append({"peer": "", "token": "b", "name": "지우", "online": true, "col": 1, "ready": false})
-	lobby.seats[0]["ready"] = true
-	lobby._add_chat({"seat": 0, "name": "민수", "text": "나 왼쪽 1번 맡을게"})
-	lobby._add_chat({"seat": 1, "name": "지우", "text": "ㅇㅋ 그럼 나 2번"})
-	g.s = lobby
-	g._show("lobby")
-	await _save("lobby")
-
-	var play := GSession.new(null, "민수", "me")
-	play.open_host(true)
-	play.seats[1]["name"] = "지우"
-	play.m.players[1]["name"] = "지우"
-	g.s = play
-	g._enter_game()
-	var m: GMatch = play.m
-	m.apply(0, {"op": "build", "type": "cannon", "x": 6, "y": 7})
-	m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 9})
-	g.selected = m.tower_cells()[Vector2i(6, 7)]
-	play._add_chat({"seat": 1, "name": "지우", "text": "네 대포 감싸게 돌려볼게"})
-	play.command({"op": "ping", "kind": "road", "x": 5.5, "y": 3.5})
-	m.apply(0, {"op": "draft", "e": 0, "i": 8, "kind": "bend", "side": 1})
-	await _save("prep")
-	m.apply(0, {"op": "draft"})
-
-	while m.wave < GData.THEME_LEN and m.phase != "over":
+func _play_to(m: GMatch, wave: int) -> void:
+	while m.wave < wave and m.phase != "over":
 		if m.phase == "prep":
 			GBot.play_prep(m, 0)
 			GBot.play_prep(m, 1)
@@ -59,21 +29,64 @@ func _run() -> void:
 			m.apply(1, {"op": "ready", "v": true})
 		else:
 			m.step()
-	GBot.play_prep(m, 0)
-	GBot.play_prep(m, 1)
-	m.apply(0, {"op": "ready", "v": true})
-	m.apply(1, {"op": "ready", "v": true})
-	for _i in 260:
-		m.step()
-	g.selected = m.towers.keys()[0]
-	await _save("combat")
+			m.hp = maxi(m.hp, 60)
 
-	m.hp = 5
+
+func _run() -> void:
+	g = load("res://scenes/main.tscn").instantiate()
+	root.add_child(g)
+	await process_frame
+
+	var play := GSession.new(null, "민수", "me")
+	play.open_host(true)
+	play.m.players[1]["name"] = "지우"
+	g.s = play
+	g._enter_game()
+	var m: GMatch = play.m
+	await _save("t0_grass_prep")
+
+	g.mode = "build:cannon"
+	await _save("t0_grass_build")
+	g.mode = ""
+
+	for theme in range(1, 5):
+		_play_to(m, theme * GData.THEME_LEN + 1)
+		for _i in 3:
+			await process_frame
+		g._theme = theme
+		g._theme_goal = theme
+		g._trans_t = 0.0
+		g._notice_t = 3.0
+		g.selected = -1
+		await _save("t%d_prep" % theme)
+		GBot.play_prep(m, 0)
+		GBot.play_prep(m, 1)
+		m.apply(0, {"op": "ready", "v": true})
+		m.apply(1, {"op": "ready", "v": true})
+		for _i in 150:
+			m.step()
+		await _save("t%d_combat" % theme)
+		while m.phase == "combat":
+			m.step()
+			m.hp = maxi(m.hp, 40)
+
+	m.hp = 28
+	await _save("damaged")
+	g._theme_goal = 2
+	for _i in 5:
+		g._trans_t = 1.5
+		await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png(out.path_join("transition.png"))
+	g._trans_t = 0.0
+	g._theme_goal = g._theme
+
 	while m.phase != "over":
 		if m.phase == "prep":
 			m.apply(0, {"op": "ready", "v": true})
 			m.apply(1, {"op": "ready", "v": true})
 		else:
+			m.hp = mini(m.hp, 3)
 			m.step()
 	await _save("result")
 	quit()

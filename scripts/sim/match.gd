@@ -215,7 +215,7 @@ func _start_wave() -> void:
 	draft = {}
 	_wave_t = 0.0
 	_queue = []
-	for g in GData.WAVES[wave - 1]:
+	for g in GData.wave_groups(wave):
 		for n in int(g[2]):
 			_queue.append({"t": float(g[4]) + n * float(g[3]), "e": int(g[0]), "type": str(g[1])})
 	_queue.sort_custom(func(a, b): return a["t"] < b["t"])
@@ -233,7 +233,7 @@ func step(dt := GData.TICK) -> void:
 	while not _queue.is_empty() and _queue[0]["t"] <= _wave_t and enemies.size() < GData.MAX_ALIVE:
 		var q: Dictionary = _queue.pop_front()
 		var d: Dictionary = GData.ENEMIES[q["type"]]
-		var max_hp: float = float(d["hp"]) * GData.hp_mul
+		var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave)
 		enemies.append({"id": _next_id, "type": q["type"], "e": q["e"], "dist": 0.0, "hp": max_hp, "max": max_hp,
 			"slow": 0.0, "slow_t": 0.0})
 		_next_id += 1
@@ -253,7 +253,15 @@ func _move_enemies(dt: float) -> void:
 			if en["slow_t"] <= 0.0:
 				en["slow"] = 0.0
 		var d: Dictionary = GData.ENEMIES[en["type"]]
-		en["dist"] += float(d["speed"]) * (1.0 - float(en["slow"])) * dt
+		var zone := _zone()
+		var cell := Vector2i(_pos(en))
+		var boost := GData.ICE_SPEED if zone == "ice" and _in_zones(cell, GData.ICE_ZONES) else 1.0
+		en["dist"] += float(d["speed"]) * boost * (1.0 - float(en["slow"])) * dt
+		if zone == "lava" and _in_zones(cell, GData.LAVA_ZONES):
+			en["hp"] = float(en["hp"]) - float(en["max"]) * GData.LAVA_RATE * dt
+			if float(en["hp"]) <= 0.0:
+				enemies.remove_at(idx)
+				continue
 		if en["dist"] >= board.paths[en["e"]].size() - 1 + 0.6:
 			hp -= int(d["hit"])
 			gate_dmg[int(en["e"])] += int(d["hit"])
@@ -286,6 +294,7 @@ func _fire(dt: float) -> void:
 		if t["cd"] > 0.0:
 			continue
 		var s := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
+		s["range"] = tower_range(t)
 		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
 		var target := _pick(at, float(s["range"]), str(t["prio"]))
 		if target.is_empty():
@@ -322,7 +331,7 @@ func _pick(at: Vector2, radius: float, prio: String) -> Dictionary:
 	var best := {}
 	var best_v := -INF
 	for en in enemies:
-		if _pos(en).distance_to(at) > radius:
+		if is_ghost(en) or _pos(en).distance_to(at) > radius:
 			continue
 		var v := 0.0
 		match prio:
@@ -335,7 +344,40 @@ func _pick(at: Vector2, radius: float, prio: String) -> Dictionary:
 	return best
 
 
+func _zone() -> String:
+	return str(GData.THEMES[GData.theme_of(wave)]["zone"])
+
+
+func _in_zones(cell: Vector2i, zones: Array) -> bool:
+	for r in zones:
+		if r.has_point(cell):
+			return true
+	return false
+
+
+## 환경까지 반영한 사거리
+func tower_range(t: Dictionary) -> float:
+	var r: float = GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["range"]
+	if _zone() == "sand":
+		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
+		if at.distance_to(GData.SAND_CENTER) <= GData.SAND_RADIUS:
+			r *= GData.SAND_RANGE
+	return r
+
+
+## 유령 숲: 적 셋 중 하나가 주기적으로 조준 불가. 길을 따라 움직이고 성에 닿으면 피해를 준다.
+func is_ghost(en: Dictionary) -> bool:
+	if _zone() != "ghost":
+		return false
+	if en.has("gh"):
+		return bool(en["gh"])
+	var id := int(en["id"])
+	return id % 3 == 0 and fmod(time + id * 0.37, GData.GHOST_CYCLE) < GData.GHOST_TIME
+
+
 func _hurt(en: Dictionary, s: Dictionary, owner: int) -> void:
+	if is_ghost(en):
+		return
 	var armor: float = maxf(float(GData.ENEMIES[en["type"]]["armor"]) - float(s["pierce"]), 0.0)
 	var dmg: float = maxf(float(s["dmg"]) - armor, float(s["dmg"]) * 0.25)
 	dmg = minf(dmg, float(en["hp"]))
@@ -440,7 +482,7 @@ func load_data(d: Dictionary) -> void:
 func enemies_data() -> Array:
 	var out := []
 	for en in enemies:
-		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), en["max"], snappedf(en["slow"], 0.01)])
+		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), en["max"], snappedf(en["slow"], 0.01), is_ghost(en)])
 	return out
 
 
@@ -448,4 +490,4 @@ func load_enemies(rows: Array) -> void:
 	enemies = []
 	for r in rows:
 		enemies.append({"id": int(r[0]), "type": str(r[1]), "e": int(r[2]), "dist": float(r[3]), "hp": float(r[4]),
-			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0})
+			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7])})

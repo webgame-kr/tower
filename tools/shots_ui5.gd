@@ -62,6 +62,7 @@ func _run() -> void:
 	GBot.play_prep(m, 1, true, true)
 	print("drafts ", m.drafts.keys())
 	await _save("u_prep")
+	print("prep 한글 글줄: ", g._hangul_drawn)
 	g._tut = -1
 	g.mode = "build:cannon"
 	g.hover = Vector2(9.5, 7.5)

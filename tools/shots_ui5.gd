@@ -60,6 +60,8 @@ func _run() -> void:
 	g._overview_t = 0.0
 	g._cam = Vector2(10, 7)
 	var m: GMatch = p.m
+	await _save("u_pick")
+	g._kit_open = false
 	m.apply(0, {"op": "build", "type": "cannon", "x": 6, "y": 3})
 	GBot.play_prep(m, 1, true, true)
 	print("drafts ", m.drafts.keys())

@@ -51,11 +51,127 @@ func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
 	gate_dmg.fill(0)
 	seed_ = seed_value if seed_value >= 0 else randi() % 1000000
 	for i in names.size():
-		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kit_ok(kits[i]) else GData.DEFAULT_KIT.duplicate()
+		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kits[i] is Array and not (kits[i] as Array).is_empty() else GData.DEFAULT_KIT.duplicate()
 		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
 			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
-			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0})
+			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0,
+			"hand": [], "lock": "", "picked": false, "rerolls": 0})
 	_make_plan()
+	_deal()
+
+
+## 준비 시작: 각자 카드 6장 (사람마다 다르게 섞고, 같은 카드는 되도록 적게 겹친다)
+func _deal() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([seed_, wave])
+	var pool := GData.unlocked(wave)
+	var used := {}
+	for i in players.size():
+		var p: Dictionary = players[i]
+		p["hand"] = _hand_for(i, pool, used, rng)
+		p["picked"] = false
+		p["rerolls"] = 0
+		if str(p["lock"]) != "" and not (p["kit"] as Array).has(p["lock"]):
+			p["kit"] = [p["lock"]] + (p["kit"] as Array).slice(0, GData.KIT_SIZE - 1)
+
+
+func _hand_for(seat: int, pool: Array, used: Dictionary, rng: RandomNumberGenerator) -> Array:
+	var lock := str(players[seat]["lock"])
+	var cand := pool.filter(func(k): return k != lock)
+	var keyed := []
+	for k in cand:
+		keyed.append([int(used.get(k, 0)) * 10 + rng.randi_range(0, 9), k])
+	keyed.sort_custom(func(a, b): return a[0] < b[0])
+	var hand := []
+	for row in keyed.slice(0, hand_size(seat)):
+		hand.append(row[1])
+		used[row[1]] = int(used.get(row[1], 0)) + 1
+	return hand
+
+
+func hand_size(_seat: int) -> int:
+	return GData.HAND_SIZE
+
+
+## 고르기 시작 전 첫 공구함: 손패 앞 4장 (혼자 연습·세션용)
+func auto_kits() -> void:
+	for p in players:
+		var hand: Array = p["hand"]
+		if hand.size() >= GData.KIT_SIZE:
+			p["kit"] = hand.slice(0, GData.KIT_SIZE)
+
+
+## 고르기: 잠근 카드 + 손패에서 나머지 (모두 4장)
+func _pick_kit(seat: int, c: Dictionary) -> String:
+	if phase != "prep":
+		return "준비 단계에서만 고를 수 있어요"
+	var v = c.get("v", [])
+	if not v is Array:
+		return "카드를 골라 주세요"
+	var p: Dictionary = players[seat]
+	var lock := str(p["lock"])
+	var kit := []
+	for t in v:
+		var k := str(t)
+		if kit.has(k):
+			return "같은 카드를 두 번 고를 수 없어요"
+		if not ((p["hand"] as Array).has(k) or k == lock):
+			return "손에 없는 카드예요"
+		kit.append(k)
+	if lock != "" and not kit.has(lock):
+		kit.push_front(lock)
+	if kit.size() != GData.KIT_SIZE:
+		return "%d장을 골라 주세요" % (GData.KIT_SIZE - (1 if lock != "" else 0))
+	p["kit"] = kit
+	p["picked"] = true
+	return ""
+
+
+## 잠금: 지금 공구함의 한 장을 다음 웨이브에도 남긴다 (한 칸)
+func _lock(seat: int, c: Dictionary) -> String:
+	var k := str(c.get("v", ""))
+	var p: Dictionary = players[seat]
+	if k != "" and not (p["kit"] as Array).has(k):
+		return "공구함에 있는 카드만 잠글 수 있어요"
+	p["lock"] = "" if k == str(p["lock"]) else k
+	return ""
+
+
+## 다시 뽑기: 웨이브마다 첫 번은 무료, 그다음 30골드
+func _reroll(seat: int) -> String:
+	if phase != "prep":
+		return "준비 단계에서만 다시 뽑을 수 있어요"
+	var p: Dictionary = players[seat]
+	var cost := reroll_cost(seat)
+	if int(p["gold"]) < cost:
+		return "골드가 부족해요"
+	p["gold"] = int(p["gold"]) - cost
+	p["rerolls"] = int(p["rerolls"]) + 1
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([seed_, wave, seat, int(p["rerolls"])])
+	var used := {}
+	for i in players.size():
+		if i != seat:
+			for k in players[i]["hand"]:
+				used[k] = int(used.get(k, 0)) + 1
+	for k in p["hand"]:
+		used[k] = int(used.get(k, 0)) + 2      # 같은 카드가 그대로 나오지 않게
+	p["hand"] = _hand_for(seat, GData.unlocked(wave), used, rng)
+	return ""
+
+
+func reroll_cost(seat: int) -> int:
+	return 0 if int(players[seat]["rerolls"]) == 0 else GData.REROLL_COST
+
+
+## 팀 공구함 전체의 서로 다른 포탑 수
+func team_kinds() -> int:
+	var all := {}
+	for p in players:
+		if p["online"]:
+			for k in p["kit"]:
+				all[k] = true
+	return all.size()
 
 
 static func kit_ok(kit) -> bool:
@@ -185,6 +301,9 @@ func apply(seat: int, c: Dictionary) -> String:
 		"draft": err = _draft(seat, c)
 		"undo": err = _undo_edit(seat)
 		"kit": err = _set_kit(seat, c)
+		"pick": err = _pick_kit(seat, c)
+		"lock": err = _lock(seat, c)
+		"reroll": err = _reroll(seat)
 		"ready": return _set_ready(seat, bool(c.get("v", true)))
 		_: return "알 수 없는 요청이에요"
 	if err == "":
@@ -638,6 +757,10 @@ func _start_wave() -> void:
 		p["call"] = false
 	for id in towers:
 		towers[id]["fresh"] = false
+	if team_kinds() >= GData.TEAM_KIT_BONUS:      # 팀 공구함이 서로 다른 6종 이상이면 자재 +1
+		for p in players:
+			p["mat"] = mini(int(p["mat"]) + 1, GData.MAT_MAX)
+		fx.append({"k": "teambonus"})
 	version += 1
 
 
@@ -1283,6 +1406,7 @@ func _advance() -> void:
 		gate_dmg.append(0)
 		fx.append({"k": "open", "e": board.paths.size() - 1})
 	_make_plan()
+	_deal()
 
 
 func next_online(from: int) -> int:
@@ -1355,6 +1479,13 @@ func load_data(d: Dictionary) -> void:
 		for t in p.get("kit", GData.DEFAULT_KIT):
 			kit.append(str(t))
 		p["kit"] = kit
+		var hand: Array = []
+		for t in p.get("hand", []):
+			hand.append(str(t))
+		p["hand"] = hand
+		p["lock"] = str(p.get("lock", ""))
+		p["picked"] = bool(p.get("picked", false))
+		p["rerolls"] = int(p.get("rerolls", 0))
 	towers = {}
 	for r in d["tw"]:
 		towers[int(r[0])] = {"id": int(r[0]), "owner": int(r[1]), "type": str(r[2]), "x": int(r[3]), "y": int(r[4]),

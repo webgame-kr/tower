@@ -88,7 +88,8 @@ func _begin() -> void:
 	if solo and seats.size() > 1:      # 연습 동료는 사람과 겹치지 않는 포탑을 든다
 		kits[1] = GBot.pick_kit(kits[0])
 	GData.difficulty = difficulty if GData.DIFFICULTY.has(difficulty) else "normal"
-	m = GMatch.new(names, kits)
+	m = GMatch.new(names, [])
+	m.auto_kits()
 	for i in seats.size():
 		m.players[i]["online"] = seats[i]["online"]
 		m.players[i]["col"] = seats[i]["col"]

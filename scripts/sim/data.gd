@@ -50,7 +50,10 @@ const MAT_WAVE := 3
 const MAT_MAX := 12
 const PATH_BASE := 64         # 입구별 길이 상한 (초원), 테마마다 +8
 const PATH_STEP := 8
-const KIT_SIZE := 5           # 공구함에 담는 포탑 수
+const KIT_SIZE := 4           # 이번 웨이브 공구함 (웨이브마다 카드에서 고른다)
+const HAND_SIZE := 6          # 준비 시작 때 나오는 카드 수
+const REROLL_COST := 30       # 다시 뽑기 (웨이브마다 첫 번은 무료)
+const TEAM_KIT_BONUS := 6     # 팀 공구함이 서로 다른 n종 이상이면 공사 자재 +1
 
 static var hp_mul := 1.8      # 적 체력 배율 (밸런스 조정용)
 static var budget_scale := {1: 0.85, 2: 0.85, 3: 1.06, 4: 1.28}
@@ -293,7 +296,25 @@ static func reactions_with(st: String) -> Array:
 
 
 const TOWER_ORDER := ["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"]
-const DEFAULT_KIT := ["gun", "cannon", "cold", "magnet", "spike"]
+const DEFAULT_KIT := ["gun", "cannon", "cold", "spike"]
+## 테마가 지날수록 열리는 포탑 (초원은 기존 10종)
+const UNLOCK := [["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"], [], [], [], []]
+
+
+static func unlocked(wave: int) -> Array:
+	var out := []
+	for t in theme_of(wave) + 1:
+		for k in UNLOCK[mini(t, UNLOCK.size() - 1)]:
+			if TOWERS.has(k) and not out.has(k):
+				out.append(k)
+	return out
+
+
+## 이번 웨이브에 새로 열린 포탑
+static func fresh_unlocks(wave: int) -> Array:
+	if (wave - 1) % THEME_LEN != 0 or wave <= 1:
+		return []
+	return (UNLOCK[mini(theme_of(wave), UNLOCK.size() - 1)] as Array).filter(func(k): return TOWERS.has(k))
 const TRAP_REPAIR := 1        # 가시 덫개 수리에 드는 공사 자재
 
 # ── 적 ──

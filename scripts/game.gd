@@ -120,7 +120,12 @@ var _wheel := {}              # 핑 휠: {at(격자), from(화면)}
 var _kit_sent := false
 const QUICK := ["여기 막아 줘", "골드 좀 나눠 줘", "길 늘려 줘", "준비 됐어"]               # 적이 바라보는 쪽 (좌우 반전)             # 길 그리기 중: {e, i, cells[], j}
 var _kit_open := false
-var _kit_pick: Array = []
+var _kit_pick: Array = []     # 카드 띠에서 고른 것
+var _pick_wave := 0           # 카드 띠를 자동으로 연 웨이브
+var pick_btns: Array = []
+var lock_btns: Array = []
+var pick_go: Button
+var pick_reroll: Button
 var _summary_wave := 0
 var _summary_t := 0.0
 var _tut := -1               # 첫 판 안내 단계 (-1 = 끝)
@@ -481,12 +486,16 @@ func _build_hud() -> void:
 		b.tooltip_text = "단축키 %d" % (i + 1)
 		slot_btns.append(b)
 	var kb := _btn(hud, Rect2(724, 634, 70, 72), "", _toggle_kit, "clear")
-	kb.tooltip_text = "공구함 바꾸기 (K) · 1웨이브 준비 중, 짓기 전에만"
+	kb.tooltip_text = "포탑 카드 고르기 (K) · 준비 중"
 	build_btns["kit"] = kb
-	for i in GData.TOWER_ORDER.size():
-		var k: String = GData.TOWER_ORDER[i]
-		kit_btns[k] = _btn(hud, Rect2(), "", _on_kit_pick.bind(k), "clear")
-		kit_btns[k].tooltip_text = "%s · %s" % [GData.TOWERS[k]["name"], GData.TOWERS[k]["role"]]
+	for i in GData.HAND_SIZE + 1:
+		pick_btns.append(_btn(hud, Rect2(), "", _on_kit_pick.bind(i), "clear"))
+	pick_go = _btn(hud, Rect2(), "", _on_pick_go, "pri", T.BODY)
+	pick_reroll = _btn(hud, Rect2(), "", _on_reroll, "sec", T.LABEL)
+	for i in GData.KIT_SIZE:
+		var lb := _btn(hud, Rect2(), "", _on_lock.bind(i), "clear")
+		lb.tooltip_text = "잠금: 다음 웨이브에도 이 카드를 남겨요"
+		lock_btns.append(lb)
 	for k in GData.REWARDS:
 		reward_btns[k] = _btn(hud, Rect2(), "", _on_vote.bind(k), "clear", T.BODY)
 		reward_btns[k].toggle_mode = true
@@ -988,11 +997,7 @@ func _enter_game() -> void:
 	_tut = 0
 	if web and str(JavaScriptBridge.get_interface("GilUI").load_key("tutorial")) == "done":
 		_tut = -1
-	if web and s and s.m and s.m.wave == 1 and s.m.phase == "prep":      # 지난번 공구함
-		var saved := str(JavaScriptBridge.get_interface("GilUI").load_key("kit"))
-		var kit := Array(saved.split(",")) if saved != "" else []
-		if GMatch.kit_ok(kit):
-			s.command({"op": "kit", "v": kit})
+	_pick_wave = 0
 	_theme = GData.theme_of(s.m.wave) if s and s.m else 0
 	_theme_goal = _theme
 	_trans_t = 0.0
@@ -1153,7 +1158,7 @@ func _update_lobby(delta: float) -> void:
 		var k: String = GData.TOWER_ORDER[i]
 		lobby_kit[k].position = Vector2(330 + i * 66, 360)
 		lobby_kit[k].size = Vector2(62, 120)
-		lobby_kit[k].visible = mine >= 0
+		lobby_kit[k].visible = false
 	var di := 0
 	for k in GData.DIFFICULTY:
 		diff_btns[k].position = Vector2(16 + di * 96, 434)
@@ -1508,12 +1513,23 @@ func _update_hud() -> void:
 	for i in slot_btns.size():
 		var k: String = kit[i] if i < kit.size() else ""
 		slot_btns[i].disabled = k == "" or locked or not prep or int(me["gold"]) < int(GData.TOWERS[k]["cost"])
-	var can_kit := prep and m.wave == 1 and not _has_towers(m)
-	build_btns["kit"].disabled = not can_kit
-	if not can_kit:
+	build_btns["kit"].disabled = not prep
+	if prep and _pick_wave != m.wave:      # 준비 시작: 카드 띠가 올라온다
+		_pick_wave = m.wave
+		_kit_pick = []
+		_kit_open = not bool(me["picked"])
+	if not prep:
 		_kit_open = false
-	for k in kit_btns:
-		kit_btns[k].visible = _kit_open
+	for i in pick_btns.size():
+		_vis(pick_btns[i], _kit_open and i < (me["hand"] as Array).size())
+	_vis(pick_go, _kit_open)
+	_vis(pick_reroll, _kit_open)
+	for i in lock_btns.size():
+		_vis(lock_btns[i], prep and i < kit.size() and not _kit_open)
+		lock_btns[i].position = slot_btns[i].position + Vector2(slot_btns[i].size.x - 24, 2)
+		lock_btns[i].size = Vector2(22, 22)
+	if _kit_open:
+		pick_reroll.disabled = int(me["gold"]) < m.reroll_cost(s.seat)
 	var can_road := prep and not locked
 	road_btns["draw"].visible = prep
 	road_btns["draw"].disabled = not can_road
@@ -1765,25 +1781,40 @@ func _has_towers(m: GMatch) -> bool:
 
 func _toggle_kit() -> void:
 	_kit_open = not _kit_open
-	if _kit_open:
-		_kit_pick = (s.m.players[s.seat]["kit"] as Array).duplicate()
 
 
-func _on_kit_pick(k: String) -> void:
+func _on_kit_pick(i: int) -> void:
 	if s.m == null:
 		return
+	var hand: Array = s.m.players[s.seat]["hand"]
+	if i >= hand.size():
+		return
+	var k: String = hand[i]
+	var need := GData.KIT_SIZE - (1 if str(s.m.players[s.seat]["lock"]) != "" else 0)
 	if _kit_pick.has(k):
 		_kit_pick.erase(k)
-	elif _kit_pick.size() < GData.KIT_SIZE:
+	elif _kit_pick.size() < need:
 		_kit_pick.append(k)
-	if _kit_pick.size() == GData.KIT_SIZE:
-		var ordered := []
-		for t in GData.TOWER_ORDER:
-			if _kit_pick.has(t):
-				ordered.append(t)
-		s.command({"op": "kit", "v": ordered})
-		if web:
-			JavaScriptBridge.get_interface("GilUI").save_key("kit", ",".join(ordered))
+
+
+func _on_pick_go() -> void:
+	var need := GData.KIT_SIZE - (1 if str(s.m.players[s.seat]["lock"]) != "" else 0)
+	if _kit_pick.size() != need:
+		_say("%d장을 골라 주세요" % need)
+		return
+	s.command({"op": "pick", "v": _kit_pick.duplicate()})
+	_kit_open = false
+
+
+func _on_reroll() -> void:
+	_kit_pick = []
+	s.command({"op": "reroll"})
+
+
+func _on_lock(i: int) -> void:
+	var kit: Array = s.m.players[s.seat]["kit"]
+	if i < kit.size():
+		s.command({"op": "lock", "v": kit[i]})
 
 
 ## 동료 길 제안: 수락은 내 자재로 확정, 거절은 내 화면에서만 접는다
@@ -2035,7 +2066,9 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 	if s == null or _paused or _panel != "":
 		return
 	if ev.keycode == KEY_ENTER or ev.keycode == KEY_KP_ENTER:
-		if _screen == "game":
+		if _screen == "game" and _kit_open:
+			_on_pick_go()
+		elif _screen == "game":
 			_open_chat()
 		elif web and _screen != "menu":
 			JavaScriptBridge.get_interface("GilUI").focus("chat")
@@ -2043,8 +2076,11 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 	if s.m == null or _screen != "game":
 		return
 	match ev.keycode:
-		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6:
 			var i: int = ev.keycode - KEY_1
+			if _kit_open:
+				_on_kit_pick(i)
+				return
 			if _quick_open and i < QUICK.size():
 				s.command({"op": "chat", "text": QUICK[i]})
 				_quick_open = false
@@ -3227,8 +3263,7 @@ func _draw_lobby() -> void:
 	_t(ck.position + Vector2(12, 6), "시작 전 확인", T.LABEL, AMBER)
 	var lines := []
 	lines.append([n >= 2, "팀원 %d명 · %d인 지도" % [n, maxi(n, 2)] if n >= 2 else "팀원이 1명 · 친구를 불러요"])
-	var mine_ok: bool = s.seat >= 0 and s.seat < n and (s.seats[s.seat].get("kit", GData.DEFAULT_KIT) as Array).size() == GData.KIT_SIZE
-	lines.append([mine_ok, "공구함 5종 고름" if mine_ok else "공구함 5종을 골라요"])
+	lines.append([true, "포탑 카드는 웨이브마다 골라요"])
 	var waiting := []
 	for i in n:
 		if not s.seats[i]["ready"]:
@@ -3259,7 +3294,7 @@ func _draw_lobby() -> void:
 			msg = "방에 들어가는 중…"
 		_t(Vector2(sb.get_center().x, sb.position.y + 10), "준비 %d/%d" % [ready_n, n], T.BIG, SUB, 1)
 		_t(Vector2(sb.get_center().x, sb.position.y + 54), msg, T.LABEL, SUB, 1)
-	_t(Vector2(sb.get_center().x, 674), "1웨이브 준비 중엔 공구함을 K로 바꿀 수 있어요", T.LABEL, SUB, 1)
+	_t(Vector2(sb.get_center().x, 674), "게임 중 K 로 포탑 카드를 다시 열 수 있어요", T.LABEL, SUB, 1)
 
 
 func _crew_rect(i: int) -> Rect2:
@@ -3298,11 +3333,7 @@ func _draw_crew(i: int) -> void:
 		_prect(r.grow(-2), OWNER[c] if not taken or c == col else Color(OWNER[c].darkened(0.6)))
 		if c == col:
 			_prect(r.grow(2), INK, false, 2.0)
-	var kit: Array = s.seats[i].get("kit", GData.DEFAULT_KIT)
-	for j in kit.size():
-		var kb := Rect2(at + Vector2(8 + (j % 3) * 50, 108 + (j / 3) * 40), Vector2(46, 36))
-		_nine(kb, "panel_well")
-		_tower_head(str(kit[j]), col % 4, kb.grow(-2))
+
 	if i != s.seat:
 		var is_ready: bool = s.seats[i]["ready"]
 		var rb := Rect2(at + Vector2(8, 194), Vector2(146, 34))
@@ -3312,50 +3343,21 @@ func _draw_crew(i: int) -> void:
 
 ## 내 공구함: 10종 중 5종, 팀원과 겹치면 표시, 팀 전체에서 빠진 종류
 func _draw_lobby_kit() -> void:
-	if s.seat < 0 or s.seat >= s.seats.size():
-		return
 	var r := Rect2(322, 318, 676, 202)
 	_nine(r, "panel_steel")
-	var mine: Array = s.seats[s.seat].get("kit", GData.DEFAULT_KIT)
-	var picked_by := {}
-	var team := {}
-	for i in s.seats.size():
-		for t in s.seats[i].get("kit", GData.DEFAULT_KIT):
-			team[t] = true
-			if i != s.seat:
-				if not picked_by.has(t):
-					picked_by[t] = []
-				picked_by[t].append(int(s.seats[i]["col"]) % 4)
-	var overlap := 0
-	for t in mine:
-		if picked_by.has(t):
-			overlap += 1
-	var head := Rect2(r.position + Vector2(10, 8), Vector2(r.size.x - 20, 28))
-	_tx(head, "내 공구함 %d/%d" % [mine.size(), GData.KIT_SIZE], T.LABEL, SUB)
-	_tx(head, "겹침 %d · 팀 %d/10" % [overlap, team.size()], T.LABEL, OK_GREEN if overlap == 0 else AMBER, 2)
-	var col := int(s.seats[s.seat]["col"]) % 4
-	for i in GData.TOWER_ORDER.size():
-		var k: String = GData.TOWER_ORDER[i]
-		var cell := Rect2(Vector2(330 + i * 66, 360), Vector2(62, 120))
-		var on := mine.has(k)
+	_tx(Rect2(r.position + Vector2(10, 8), Vector2(r.size.x - 20, 24)), "포탑은 게임 중에 골라요", T.LABEL, SUB)
+	_tx(Rect2(r.position + Vector2(10, 36), Vector2(r.size.x - 20, 28)), "준비가 시작될 때마다 카드 6장 중 4장 · 잠금 1칸 · 다시 뽑기", T.LABEL, INK)
+	_tx(Rect2(r.position + Vector2(10, 66), Vector2(r.size.x - 20, 24)), "팀원 포탑과 반응이 맞는 카드엔 그 사람 색으로 표시돼요", T.LABEL, AMBER)
+	var col := int(s.seats[maxi(s.seat, 0)]["col"]) % 4 if s.seat >= 0 and s.seat < s.seats.size() else 0
+	var pool := GData.unlocked(1)
+	for i in pool.size():
+		var cell := Rect2(r.position + Vector2(10 + i * 66, 100), Vector2(60, 92))
 		_nine(cell, "panel_dark")
-		if on:
-			_prect(cell.grow(-2), Color("3A3024"))
-			_prect(cell.grow(-2), AMBER, false, 2.0)
-		_tower_icon(k, 1, "", col, Rect2(cell.position + Vector2(6, 6), Vector2(50, 50)), Color.WHITE if on else Color(0.62, 0.62, 0.62))
-		var name: String = GData.TOWERS[k]["name"]
-		name = name.replace("탑", "").replace(" ", "")
-		if name.length() > 3:
-			name = name.left(2)
-		_tx(Rect2(cell.position + Vector2(0, 62), Vector2(cell.size.x, 24)), name, T.LABEL, INK if on else SUB, 1)
-		_tx(Rect2(cell.position + Vector2(0, 88), Vector2(cell.size.x, 24)), str(int(GData.TOWERS[k]["cost"])), T.KEY, AMBER if on else SUB, 1)
-		if picked_by.has(k):
-			var dots: Array = picked_by[k]
-			for j in dots.size():
-				var dr := Rect2(Vector2(cell.end.x - 16 - j * 14, cell.position.y + 4), Vector2(12, 12))
-				_prect(dr, OUTLINE)
-				_prect(dr.grow(-2), OWNER[dots[j]])
-
+		_tower_icon(pool[i], 1, "", col, Rect2(cell.position + Vector2(5, 4), Vector2(50, 50)))
+		var st := str(GData.tower_stats(pool[i], 1, "")["st"])
+		if st != "":
+			_prect(Rect2(cell.position + Vector2(24, 60), Vector2(12, 12)), OUTLINE)
+			_prect(Rect2(cell.position + Vector2(26, 62), Vector2(8, 8)), Color(str(GData.STATUS[st]["col"])))
 
 
 func _dashed_rect(r: Rect2, col: Color) -> void:
@@ -3495,6 +3497,7 @@ func _draw_game() -> void:
 	_draw_plates(hud)
 	_draw_bar_art(m)
 	_draw_marks(m)
+	_draw_kit_marks(m)
 	if m.phase == "reward":
 		_draw_reward(m)
 	_draw_hint(m)
@@ -3621,7 +3624,7 @@ func _ly() -> Dictionary:
 		"pause": Rect2(1244, 8, 28, 46), "banner": 68.0, "x0": 8.0, "w": 204.0, "top": 114.0, "rx": 1030.0,
 		"chat_min": Rect2(8, 456, 204, 40), "chat_max": Rect2(8, 250, 204, 246), "mini": Rect2(8, 504, 204, 108),
 		"bar": Rect2(0, 618, 1280, 102), "gold": Rect2(8, 628, 140, 84), "ability": Rect2(154, 632, 76, 78),
-		"slot": Vector2(84, 78), "slot_x": 248.0, "slot_y": 632.0, "slot_gap": 92.0, "kit": Rect2(712, 632, 50, 78),
+		"slot": Vector2(84, 78), "slot_x": 248.0, "slot_y": 632.0, "slot_gap": 92.0, "kit": Rect2(616, 632, 50, 78),
 		"ping_x": 780.0, "ping_y": 632.0, "ready": Rect2(1010, 630, 262, 82)}
 	var x0: float = L["x0"]
 	var w: float = L["w"]
@@ -3653,6 +3656,8 @@ func _over_hud(p: Vector2) -> bool:
 		if not _proposal(s.m).is_empty():
 			rects.append(L["prop"])
 	rects.append(L["insp"] if s.m.towers.has(selected) else _side_rect)
+	if _kit_open:
+		rects.append(Rect2(230, 394, 794, 218))
 	if call_btn.visible:
 		rects.append(L["call"])
 	for r in rects:
@@ -4171,6 +4176,11 @@ func _draw_bar_art(m: GMatch) -> void:
 		_tx(foot, str(cost), T.KEY, (AMBER if afford else LAMP) if m.phase == "prep" else SUB, 2)
 		if m.phase != "prep":
 			_lock(t.position + Vector2(t.size.x - 12, 10))
+		elif str(me["lock"]) == str(names[i]):
+			_prect(Rect2(t.position + Vector2(t.size.x - 22, 4), Vector2(18, 18)), AMBER)
+			_lock_glyph(t.position + Vector2(t.size.x - 13, 13), AMBER_INK)
+		elif lock_btns[i].is_hovered():
+			_lock_glyph(t.position + Vector2(t.size.x - 13, 13), SUB)
 	var kb := Rect2(build_btns["kit"].position, build_btns["kit"].size)
 	var kb_on: bool = not build_btns["kit"].disabled
 	_nine(kb, "panel_steel" if not _kit_open else "panel_dark")
@@ -4212,33 +4222,140 @@ func _draw_bar_art(m: GMatch) -> void:
 
 ## 공구함: 10종 중 5종 (1웨이브 준비 중, 짓기 전에만 바꿀 수 있다)
 func _draw_kit(m: GMatch) -> void:
-	var r := Rect2(300, 380, 680, 224)
-	_card(r)
-	_t(r.position + Vector2(16, 12), "공구함 · %d / %d 골라요" % [_kit_pick.size(), GData.KIT_SIZE], T.STRONG, INK)
-	var others := {}
+	var me: Dictionary = m.players[s.seat]
+	var hand: Array = me["hand"]
+	var lock := str(me["lock"])
+	var need := GData.KIT_SIZE - (1 if lock != "" else 0)
+	var r := Rect2(230, 394, 794, 218)
+	_nine(r, "panel_steel")
+	var head := Rect2(r.position + Vector2(12, 8), Vector2(r.size.x - 24, 28))
+	var title := "포탑 고르기 %d/%d" % [_kit_pick.size(), need]
+	if lock != "":
+		title += " · 잠금 %s" % GData.TOWERS[lock]["name"]
+	_tx(head, title, T.LABEL, INK)
+	# 팀 공구함으로 만들 수 있는 반응 수
+	var sts := {}
 	for i in m.players.size():
-		if i != s.seat:
-			for t in m.players[i]["kit"]:
-				others[t] = true
-	var overlap := 0
-	for t in _kit_pick:
-		if others.has(t):
-			overlap += 1
-	_t(Vector2(r.end.x - 16, r.position.y + 14), ("동료와 겹침 %d종" % overlap) if overlap > 0 else "동료와 안 겹쳐요", T.LABEL, AMBER if overlap > 0 else OK_GREEN, 2)
-	var my_col := int(m.players[s.seat].get("col", 0)) % 4
-	for i in GData.TOWER_ORDER.size():
-		var k: String = GData.TOWER_ORDER[i]
-		var cell := Rect2(r.position + Vector2(16 + (i % 5) * 130, 44 + (i / 5) * 86), Vector2(124, 80))
+		var kit: Array = _kit_pick + ([lock] if lock != "" else []) if i == s.seat else m.players[i]["kit"]
+		for k in kit:
+			var st := str(GData.tower_stats(k, 1, "")["st"])
+			if st != "":
+				sts[st] = true
+	var rx := {}
+	for a in sts:
+		for b in sts:
+			var name := GData.reaction_of(a, b)
+			if name != "":
+				rx[name] = true
+	_tx(Rect2(head.position + Vector2(_sz(title, T.LABEL).x + 16, 0), Vector2(200, 28)), "· 반응 %d종 가능" % rx.size(), T.LABEL, AMBER)
+	# 팀원이 고른 것
+	var tx := r.position.x + 12
+	var ty := r.position.y + 36
+	for i in m.players.size():
+		if i == s.seat:
+			continue
+		var p: Dictionary = m.players[i]
+		_prect(Rect2(tx, ty + 7, 10, 10), OWNER[int(p.get("col", i)) % 4])
+		var names := []
+		for k in p["kit"]:
+			names.append(str(GData.TOWERS[k]["name"]).replace("탑", ""))
+		var line := " · ".join(names) + ("" if bool(p["picked"]) else " (고르는 중)")
+		_tx(Rect2(tx + 16, ty, 380, 24), line, T.LABEL, SUB)
+		tx += 16 + minf(_sz(line, T.LABEL).x, 360) + 20
+	# 카드 6장
+	var my_col := int(me.get("col", 0)) % 4
+	var cw := 124.0
+	var fresh := GData.fresh_unlocks(m.wave)
+	for i in hand.size():
+		var k: String = hand[i]
+		var c := Rect2(r.position.x + 10 + i * (cw + 6), r.position.y + 64, cw, 146)
+		pick_btns[i].position = c.position
+		pick_btns[i].size = c.size
 		var on := _kit_pick.has(k)
-		kit_btns[k].position = cell.position
-		kit_btns[k].size = cell.size
-		_metal(cell, Color("4a4334") if on else PANEL_HI, Color("3c3628") if on else PANEL_LO, AMBER if on else LINE)
-		_tower_icon(k, 1, "", my_col, Rect2(cell.position + Vector2(6, 6), Vector2(44, 68)))
-		_t(cell.position + Vector2(56, 12), str(GData.TOWERS[k]["name"]), T.LABEL, INK)
-		_t(cell.position + Vector2(56, 32), str(GData.TOWERS[k]["role"]), T.LABEL, SUB)
-		_t(cell.position + Vector2(56, 52), "%dG" % int(GData.TOWERS[k]["cost"]), T.LABEL, AMBER)
-		if others.has(k):
-			_t(cell.end - Vector2(8, 22), "동료", T.LABEL, OWNER_TEXT[1], 2)
+		_nine(c, "panel_dark")
+		if on:
+			_prect(c.grow(-2), Color("3A3024"))
+			_prect(c.grow(-2), AMBER, false, 2.0)
+		elif pick_btns[i].is_hovered():
+			_prect(c.grow(-2), Color("8C939A"), false, 2.0)
+		_tx(Rect2(c.position + Vector2(6, 4), Vector2(20, 20)), str(i + 1), T.KEY, SUB)
+		if fresh.has(k):
+			_prect(Rect2(c.end.x - 40, c.position.y + 6, 34, 18), AMBER)
+			_tx(Rect2(c.end.x - 40, c.position.y + 4, 34, 20), "NEW", T.KEY, AMBER_INK, 1)
+		_tower_icon(k, 1, "", my_col, Rect2(c.position + Vector2((cw - 50) * 0.5, 4), Vector2(50, 50)))
+		_tx(Rect2(c.position + Vector2(6, 56), Vector2(cw - 12, 24)), str(GData.TOWERS[k]["name"]), T.LABEL, INK)
+		var row2 := Rect2(c.position + Vector2(8, 82), Vector2(cw - 16, 24))
+		_tx(row2, str(int(GData.TOWERS[k]["cost"])), T.KEY, AMBER, 2)
+		var st := str(GData.tower_stats(k, 1, "")["st"])
+		if st != "":
+			_prect(Rect2(row2.position + Vector2(0, 6), Vector2(12, 12)), OUTLINE)
+			_prect(Rect2(row2.position + Vector2(2, 8), Vector2(8, 8)), Color(str(GData.STATUS[st]["col"])))
+			_tx(Rect2(row2.position + Vector2(16, 0), Vector2(70, 24)), str(GData.STATUS[st]["name"]), T.LABEL, SUB)
+		else:
+			_tx(Rect2(row2.position, Vector2(70, 24)), "상태 없음", T.LABEL, Color("6A6660"))
+		var fit := _card_fit(m, k)
+		if not fit.is_empty():
+			var line := str(fit[0])
+			while line.length() > 2 and _sz(line, T.LABEL).x > cw - 12:
+				line = line.left(line.length() - 1)
+			_tx(Rect2(c.position + Vector2(6, 112), Vector2(cw - 12, 24)), line, T.LABEL, fit[1])
+	pick_go.position = Vector2(r.end.x - 178, r.position.y + 8)
+	pick_go.size = Vector2(166, 48)
+	pick_reroll.position = Vector2(r.end.x - 346, r.position.y + 8)
+	pick_reroll.size = Vector2(160, 48)
+
+
+## 카드 글자는 버튼 판 위에
+func _draw_kit_marks(m: GMatch) -> void:
+	if not _kit_open:
+		return
+	var me: Dictionary = m.players[s.seat]
+	var cost := m.reroll_cost(s.seat)
+	_tx(Rect2(pick_reroll.position, pick_reroll.size), "다시 뽑기 %s" % ("무료" if cost == 0 else str(cost)), T.LABEL, INK if not pick_reroll.disabled else SUB, 1)
+	var need := GData.KIT_SIZE - (1 if str(me["lock"]) != "" else 0)
+	_tx(Rect2(pick_go.position + Vector2(10, 0), Vector2(pick_go.size.x - 50, pick_go.size.y)), "확정", T.BODY, AMBER_INK if _kit_pick.size() == need else SUB)
+	_key_chip(pick_go.position + Vector2(pick_go.size.x - 66, 13), "ENTER")
+
+
+## 카드 아래 한 줄: 팀원 포탑과 만들 반응, 이번 웨이브 적과의 상성
+func _card_fit(m: GMatch, k: String) -> Array:
+	var st := str(GData.tower_stats(k, 1, "")["st"])
+	if st != "":
+		for i in m.players.size():
+			if i == s.seat:
+				continue
+			var theirs := {}
+			for t in m.players[i]["kit"]:
+				theirs[str(GData.tower_stats(t, 1, "")["st"])] = true
+			for id in m.towers:
+				if int(m.towers[id]["owner"]) == i:
+					var tt: Dictionary = m.towers[id]
+					theirs[str(GData.tower_stats(tt["type"], int(tt["lv"]), str(tt["branch"]))["st"])] = true
+			for o in theirs:
+				var rx := GData.reaction_of(st, str(o))
+				if rx != "":
+					return ["%s · %s" % [GData.REACTIONS[rx]["name"], str(m.players[i]["name"]).left(4)], OWNER_TEXT[int(m.players[i].get("col", i)) % 4]]
+	var kinds := {}
+	for g in m.wave_plan():
+		kinds[str(g[1])] = true
+	var s1 := GData.tower_stats(k, 1, "")
+	for e in kinds:
+		var d: Dictionary = GData.ENEMIES[e]
+		if bool(d.get("fireproof", false)) and bool(s1["fire"]):
+			return ["%s에 약함" % d["name"], LAMP]
+		if float(d["armor"]) >= 4.0 and (str(s1["st"]) == "mag" or float(s1["dmg"]) >= 40.0):
+			return ["%s에 강함" % d["name"], OK_GREEN]
+		if (d.has("phase") or d.has("burrow")) and k == "signal":
+			return ["%s 드러냄" % d["name"], OK_GREEN]
+	return []
+
+
+func _lock_glyph(c: Vector2, col: Color) -> void:
+	c = _ev(c)
+	_prect(Rect2(c + Vector2(-4, -6), Vector2(8, 2)), col)
+	_prect(Rect2(c + Vector2(-4, -6), Vector2(2, 4)), col)
+	_prect(Rect2(c + Vector2(2, -6), Vector2(2, 4)), col)
+	_prect(Rect2(c + Vector2(-6, -2), Vector2(12, 8)), col)
 
 
 func _lock(at: Vector2) -> void:

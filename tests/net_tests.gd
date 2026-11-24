@@ -66,6 +66,10 @@ func _init() -> void:
 	ok(h.start_match() == "", "경기 시작")
 	pump(h, c)
 	ok(c.state == "game" and c.m != null, "손님에게 경기 전달")
+	h.m.players[1]["kit"] = ["gun", "cannon", "cold", "spike"]      # 손님 공구함을 정해 둔다 (카드는 무작위)
+	h.m.version += 1
+	h.tick(0.05)
+	pump(h, c)
 
 	c.command({"op": "build", "type": "gun", "x": 5, "y": 3})
 	pump(h, c)
@@ -144,7 +148,7 @@ func _init() -> void:
 	ok(solo.m.players[1]["ready"] == true and solo.m.towers.size() > 0, "연습 동료가 준비")
 	solo.command({"op": "ready", "v": true})
 	ok(solo.m.phase == "combat", "연습 모드 전투 시작")
-	ok(int(solo.m.players[1]["mat"]) == GData.MAT_START, "연습 동료는 길을 직접 바꾸지 않음")
+	ok(int(solo.m.players[1]["mat"]) == GData.MAT_START + (1 if solo.m.team_kinds() >= GData.TEAM_KIT_BONUS else 0), "연습 동료는 길을 직접 바꾸지 않음")
 	ok(solo.chat.any(func(r): return int(r["seat"]) == 1 and r.has("x")), "연습 동료가 길 변경을 핑으로 제안")
 	solo.command({"op": "speed", "v": true})
 	ok(solo.m.speed == 2, "혼자 연습에서는 2배가 바로 켜짐")

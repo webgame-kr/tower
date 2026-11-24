@@ -16,9 +16,44 @@ static func pick_kit(taken: Array) -> Array:
 	return kit
 
 
+## 손패에서 4장: 화력 2 + 팀원 상태와 반응이 맞는 것 우선
+static func pick_hand(m: GMatch, seat: int) -> void:
+	var p: Dictionary = m.players[seat]
+	if bool(p["picked"]) or (p["hand"] as Array).is_empty():
+		return
+	var team_st := {}
+	for i in m.players.size():
+		if i == seat:
+			continue
+		for k in m.players[i]["kit"]:
+			var st := str(GData.tower_stats(k, 1, "")["st"])
+			if st != "":
+				team_st[st] = true
+	var prefer := ["gun", "cannon", "shock", "flame", "sniper", "cold", "oil", "magnet", "spike", "signal"]
+	var scored := []
+	for k in p["hand"]:
+		var st := str(GData.tower_stats(k, 1, "")["st"])
+		var v := 10.0 - prefer.find(k) * 0.5 if prefer.has(k) else 5.0
+		for o in team_st:
+			if st != "" and GData.reaction_of(st, o) != "":
+				v += 3.0
+		scored.append([v, k])
+	scored.sort_custom(func(a, b): return a[0] > b[0])
+	var kit := []
+	if str(p["lock"]) != "":
+		kit.append(p["lock"])
+	for row in scored:
+		if kit.size() >= GData.KIT_SIZE:
+			break
+		if not kit.has(row[1]):
+			kit.append(row[1])
+	m.apply(seat, {"op": "pick", "v": kit})
+
+
 ## 준비 단계에서 할 일을 모두 하고 준비 완료한다.
 ## suggest_only: 혼자 연습의 동료는 길을 직접 바꾸지 않고, 미리보기로 제안만 한다 (돌려준 값이 제안).
 static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := false) -> Dictionary:
+	pick_hand(m, seat)
 	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
 	var suggestion := {}
 	if use_roads:

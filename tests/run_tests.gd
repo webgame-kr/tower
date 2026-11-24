@@ -25,6 +25,7 @@ func _init() -> void:
 	_rewards()
 	_early()
 	_reactions()
+	_picks()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -183,10 +184,12 @@ func _economy() -> void:
 	var g: int = m.players[0]["gold"]
 	ok(m.apply(0, {"op": "sell", "id": id}) == "" and m.players[0]["gold"] == g + int(floor(spent * 0.8)), "지난 웨이브 포탑은 80% 환급")
 	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3}) != "", "공구함에 없는 포탑은 못 지음")
-	ok(m.apply(0, {"op": "kit", "v": ["gun", "cold", "shock", "sniper", "spike"]}) == "", "공구함 바꾸기")
-	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3}) == "", "바꾼 공구함 포탑 건설")
-	ok(m.apply(0, {"op": "kit", "v": ["gun", "cold", "oil", "sniper", "spike"]}) != "", "지은 포탑은 공구함에서 못 뺌")
-	ok(m.apply(0, {"op": "kit", "v": ["gun", "gun", "cold", "oil", "spike"]}) != "", "공구함은 서로 다른 5종")
+	m.players[0]["hand"] = ["shock", "sniper", "oil", "flame", "spike", "cold"]
+	ok(m.apply(0, {"op": "pick", "v": ["spike", "cold", "shock", "sniper"]}) == "" and bool(m.players[0]["picked"]), "카드 4장 골라 공구함")
+	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3}) == "", "고른 카드 포탑 건설")
+	ok(m.apply(0, {"op": "pick", "v": ["spike", "spike", "cold", "oil"]}) != "", "같은 카드 두 번 불가")
+	ok(m.apply(0, {"op": "pick", "v": ["magnet", "cold", "oil", "spike"]}) != "", "손에 없는 카드 불가")
+	ok(m.apply(0, {"op": "pick", "v": ["cold", "oil", "spike"]}) != "", "4장이 아니면 불가")
 	ok(m.apply(0, {"op": "build", "type": "spike", "x": 5, "y": 2}) != "", "함정은 길 밖에 못 놓음")
 	ok(m.apply(0, {"op": "build", "type": "spike", "x": 5, "y": 4}) == "", "함정은 길 칸에")
 	ok(m.check_route(0, 0, _detour(m)).has("err") == false, "함정이 있어도 길은 다시 그릴 수 있음")
@@ -337,7 +340,7 @@ func _enemies() -> void:
 			break
 	ok(hidden_at >= 0.0, "유령병은 주기적으로 조준 불가")
 	m.phase = "prep"
-	m.apply(0, {"op": "kit", "v": ["gun", "signal", "cold", "oil", "flame"]})
+	m.players[0]["kit"] = ["gun", "signal", "cold", "oil"]
 	m.apply(0, {"op": "build", "type": "signal", "x": 5, "y": 3})
 	m.time = hidden_at
 	ok(not m.is_hidden(ph), "신호탑 근처의 유령병은 실체화")
@@ -532,6 +535,46 @@ func _rx(a: String, b: String, o1 := 0, o2 := 0) -> Array:
 	m._apply_status(en, a, o1)
 	m._apply_status(en, b, o2)
 	return [m, en, near]
+
+
+func _picks() -> void:
+	var m := GMatch.new(["A", "B"], [], 11)
+	ok((m.players[0]["hand"] as Array).size() == GData.HAND_SIZE and (m.players[1]["hand"] as Array).size() == GData.HAND_SIZE, "준비 시작 때 각자 카드 6장")
+	var both := 0
+	for k in m.players[0]["hand"]:
+		if (m.players[1]["hand"] as Array).has(k):
+			both += 1
+	ok(both <= 2, "두 사람 카드 겹침은 최대 2장 (%d)" % both)
+	ok(GData.unlocked(1).size() == 10, "초원은 기존 10종")
+	var hand: Array = m.players[0]["hand"]
+	m.apply(0, {"op": "pick", "v": hand.slice(0, 4)})
+	ok(m.apply(0, {"op": "lock", "v": hand[0]}) == "" and str(m.players[0]["lock"]) == hand[0], "고른 카드 하나 잠금")
+	ok(m.apply(0, {"op": "lock", "v": "nope"}) != "", "공구함에 없는 카드는 못 잠금")
+	var gold: int = m.players[0]["gold"]
+	ok(m.apply(0, {"op": "reroll"}) == "" and int(m.players[0]["gold"]) == gold, "다시 뽑기 첫 번은 무료")
+	ok(m.apply(0, {"op": "reroll"}) == "" and int(m.players[0]["gold"]) == gold - GData.REROLL_COST, "두 번째부터 30골드")
+	m.wave = 1
+	m._finish_wave()
+	ok(m.wave == 2 and (m.players[0]["kit"] as Array).has(hand[0]) and not (m.players[0]["hand"] as Array).has(hand[0]), "잠근 카드는 다음 웨이브에도 공구함에 (손패에는 없음)")
+	var h2: Array = m.players[0]["hand"]
+	ok(m.apply(0, {"op": "pick", "v": h2.slice(0, 3)}) == "" and (m.players[0]["kit"] as Array)[0] == hand[0], "잠금이 있으면 3장만 고름")
+	var keep: Array = (m.players[1]["kit"] as Array).duplicate()
+	m.apply(0, {"op": "ready", "v": true})
+	m.apply(1, {"op": "ready", "v": true})
+	ok(m.players[1]["kit"] == keep, "안 고르고 준비하면 지난 공구함 그대로")
+	var tb := GMatch.new(["A", "B"])
+	tb.players[0]["kit"] = ["gun", "cannon", "cold", "oil"]
+	tb.players[1]["kit"] = ["flame", "shock", "sniper", "spike"]
+	var mat: int = tb.players[0]["mat"]
+	tb.apply(0, {"op": "ready", "v": true})
+	tb.apply(1, {"op": "ready", "v": true})
+	ok(int(tb.players[0]["mat"]) == mat + 1, "팀 공구함 서로 다른 6종 이상이면 자재 +1")
+	var bot := GMatch.new(["A", "B"], [], 5)
+	GBot.pick_hand(bot, 1)
+	ok(bool(bot.players[1]["picked"]) and (bot.players[1]["kit"] as Array).size() == 4, "봇도 손패에서 4장 고름")
+	var copy := GMatch.new()
+	copy.load_data(JSON.parse_string(JSON.stringify(m.to_data())))
+	ok(copy.players[0]["hand"] == m.players[0]["hand"] and copy.players[0]["lock"] == m.players[0]["lock"], "손패·잠금 동기화")
 
 
 func _reactions() -> void:

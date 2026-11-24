@@ -60,7 +60,8 @@ const CFG_DEFAULT := {"font": 100, "fx_low": false, "thick": false, "shake": 30,
 const OWNER := [Color("E0533D"), Color("3D6FD1"), Color("E9B935"), Color("38A672")]
 const OWNER_TEXT := [Color("FF8A78"), Color("7FA6F0"), Color("E9B935"), Color("5FCB97")]
 const MARK := ["●", "▲", "■", "◆"]
-const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "magnet": 3, "oil": 4, "flame": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9}
+const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "magnet": 3, "oil": 4, "flame": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9,
+	"steam": 10, "crane": 11, "generator": 12, "conveyor": 13, "welder": 14, "cryo": 15, "searchlight": 16, "scrap": 17}
 const TW := Vector2(34, 50)                # 포탑 그림 한 칸 (픽셀): 아래 19줄이 그 칸
 const EW := Vector2(44, 40)                # 적 그림 한 칸 (픽셀), 발은 (22, 38)
 const TILE := 19.0                         # 픽셀 아트 타일 (화면 칸 = 19 x 배율)
@@ -4407,7 +4408,13 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 		_tx(Rect2(cx + 20, r.position.y + 38, 80, 24), str(GData.STATUS[stn]["name"]), T.LABEL, INK)
 	var rows: Array = []
 	if bool(st["support"]):
-		rows = [["사거리 증가", "+%d%%" % roundi(st["buff"] * 100)], ["표식 범위", "%.1f칸" % st["mark_r"]]]
+		if float(st["volt"]) > 0.0:
+			rows.append(["전기 피해", "+%d%%" % roundi(st["volt"] * 100)])
+		if float(st["buff"]) > 0.0:
+			rows.append(["사거리 증가", "+%d%%" % roundi(st["buff"] * 100)])
+		if float(st["mark_r"]) > 0.0:
+			rows.append(["표식 범위", "%.1f칸" % st["mark_r"]])
+		rows = rows.slice(0, 2)
 	elif bool(st["trap"]):
 		rows = [["피해", "%.0f" % st["dmg"]], ["내구", "%d/%d" % [int(t["uses"]), int(st["uses"])]]]
 	elif bool(st["aura"]) and float(st["cd"]) < 0.5:

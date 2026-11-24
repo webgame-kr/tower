@@ -26,6 +26,7 @@ func _init() -> void:
 	_early()
 	_reactions()
 	_picks()
+	_new_towers()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -535,6 +536,94 @@ func _rx(a: String, b: String, o1 := 0, o2 := 0) -> Array:
 	m._apply_status(en, a, o1)
 	m._apply_status(en, b, o2)
 	return [m, en, near]
+
+
+func _new_towers() -> void:
+	ok(GData.unlocked(6).size() == 13 and GData.unlocked(11).size() == 16 and GData.unlocked(16).size() == 18, "포탑 열림: 초원 10 → 설원 +3 → 사막 +3 → 화산 +2")
+	ok(GData.fresh_unlocks(6) == ["steam", "cryo", "searchlight"] and GData.fresh_unlocks(7).is_empty(), "새로 열린 포탑은 테마 첫 웨이브에")
+	# 증기탑: 혼자서 냉기·화상 번갈아 → 열충격
+	var st := GMatch.new(["A", "B"], [["steam", "gun", "cold", "spike"]])
+	st.apply(0, {"op": "build", "type": "steam", "x": 5, "y": 3})
+	st.phase = "combat"
+	var a := _enemy(1, 5.0)
+	a["hp"] = 1000.0
+	st.enemies = [a]
+	for _i in 30:
+		st._fire(0.05)
+	ok(int(st.rx_log.get("thermal", 0)) >= 1, "증기탑 혼자서 열충격")
+	# 크레인 A: 기절
+	var cr := GMatch.new(["A", "B"])
+	cr.phase = "combat"
+	var b := _enemy(1, 5.0)
+	cr.enemies = [b]
+	cr._hurt(b, GData.tower_stats("crane", 3, "a"), 0)
+	ok(float(b["stun"]) >= 1.0, "크레인 들었다 놓기: 기절")
+	# 발전기: 주변 전기 피해 +
+	var gn := GMatch.new(["A", "B"], [["shock", "generator", "cold", "spike"]])
+	gn.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3})
+	gn.apply(0, {"op": "build", "type": "generator", "x": 7, "y": 3})
+	ok(is_equal_approx(float(gn._volt_at(Vector2(5.5, 3.5))[0]), 0.2), "발전기 근처 전기 피해 +20%")
+	# 비상 배터리: 긴급 냉각 +1
+	var bt := GMatch.new(["A", "B"], [["generator", "gun", "cold", "spike"]])
+	bt.players[0]["gold"] = 2000
+	bt.apply(0, {"op": "build", "type": "generator", "x": 7, "y": 3})
+	var gid: int = bt.towers.keys()[0]
+	bt.apply(0, {"op": "upgrade", "id": gid})
+	bt.apply(0, {"op": "upgrade", "id": gid, "branch": "b"})
+	bt.apply(0, {"op": "ready", "v": true})
+	bt.apply(1, {"op": "ready", "v": true})
+	ok(bt.apply(0, {"op": "ability", "x": 5.0, "y": 4.0}) == "" and bt.apply(0, {"op": "ability", "x": 6.0, "y": 4.0}) == "" and bt.apply(0, {"op": "ability", "x": 6.0, "y": 4.0}) != "", "비상 배터리: 긴급 냉각 2회")
+	# 컨베이어 A: 한 칸 뒤로
+	var cv := GMatch.new(["A", "B"], [["conveyor", "gun", "cold", "spike"]])
+	cv.players[0]["gold"] = 2000
+	cv.apply(0, {"op": "build", "type": "conveyor", "x": 3, "y": 4})
+	var cid: int = cv.towers.keys()[0]
+	cv.apply(0, {"op": "upgrade", "id": cid})
+	cv.apply(0, {"op": "upgrade", "id": cid, "branch": "a"})
+	cv.phase = "combat"
+	var w := _enemy(1, 2.6)
+	cv.enemies = [w]
+	cv._move_enemies(0.2)
+	ok(float(w["dist"]) < 2.6, "컨베이어 역회전: 뒤로 밀림")
+	# 용접 A: 화상 + 감전 (과열), B: 누적
+	var wd := GMatch.new(["A", "B"])
+	wd.phase = "combat"
+	var c := _enemy(1, 5.0)
+	c["hp"] = 1000.0
+	wd.enemies = [c]
+	wd._hurt(c, GData.tower_stats("welder", 3, "a"), 0)
+	ok(int(wd.rx_log.get("overheat", 0)) == 1, "플라스마: 화상 + 감전 = 과열")
+	# 냉동 미사일 A: 산산조각
+	var cy := GMatch.new(["A", "B"])
+	cy.phase = "combat"
+	var d := _enemy(1, 5.0)
+	d["hp"] = 1000.0
+	cy.enemies = [d]
+	cy._apply_status(d, "cold", 1)
+	cy._hurt(d, GData.tower_stats("cryo", 3, "a"), 0)
+	ok(int(cy.rx_log.get("shatter", 0)) == 1, "집속탄: 냉기 적에게 산산조각")
+	# 탐조등: 표식, 유령 드러냄
+	var sl := GMatch.new(["A", "B"], [["searchlight", "gun", "cold", "spike"]])
+	sl.apply(0, {"op": "build", "type": "searchlight", "x": 5, "y": 3})
+	sl.phase = "combat"
+	var e := _enemy(1, 5.0)
+	sl.enemies = [e]
+	sl._fire(0.05)
+	ok((e["st"] as Dictionary).has("mark") and sl._revealed(Vector2(5.5, 4.5)), "탐조등: 표식과 드러내기")
+	# 고철 더미: 자성 장판
+	var sc := GMatch.new(["A", "B"])
+	sc.phase = "combat"
+	var f := _enemy(1, 5.0)
+	sc.enemies = [f]
+	var ss := GData.tower_stats("scrap", 3, "a")
+	ss["range"] = 5.0
+	sc.towers[99] = {"id": 99, "owner": 0, "type": "scrap", "x": 5, "y": 3, "lv": 3, "branch": "a", "spent": 0, "prio": "first", "cd": 0.0, "uses": 0, "heat": 0.0, "fresh": false}
+	sc._fire(0.05)
+	var has_mag := false
+	for k in sc.puddle_t:
+		if str(sc.puddle_t[k][2]) == "mag":
+			has_mag = true
+	ok(has_mag, "고철 더미: 자성 장판")
 
 
 func _picks() -> void:

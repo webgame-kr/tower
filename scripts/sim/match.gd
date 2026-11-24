@@ -723,12 +723,13 @@ func _set_ready(seat: int, v: bool) -> String:
 func _ability(seat: int, c: Dictionary) -> String:
 	if phase != "combat":
 		return "전투 중에만 쓸 수 있어요"
-	if players[seat]["used"]:
+	if int(players[seat].get("ab_left", 0 if players[seat]["used"] else 1)) <= 0:
 		return "이번 웨이브에 이미 썼어요"
 	var at := Vector2(float(c.get("x", -99)), float(c.get("y", -99)))
 	if at.x < 0 or at.y < 0 or at.x > GData.W or at.y > GData.H:
 		return "맵 안을 골라 주세요"
-	players[seat]["used"] = true
+	players[seat]["ab_left"] = int(players[seat].get("ab_left", 1)) - 1
+	players[seat]["used"] = int(players[seat]["ab_left"]) <= 0
 	players[seat]["support"] += 1
 	for en in enemies:
 		if _pos(en).distance_to(at) <= GData.ABILITY_RADIUS:
@@ -754,9 +755,14 @@ func _start_wave() -> void:
 	for p in players:
 		p["ready"] = false
 		p["used"] = false
+		p["ab_left"] = 1
 		p["call"] = false
 	for id in towers:
 		towers[id]["fresh"] = false
+		var tb := GData.tower_stats(towers[id]["type"], int(towers[id]["lv"]), str(towers[id]["branch"]))
+		if int(tb["battery"]) > 0:
+			var o := int(towers[id]["owner"])
+			players[o]["ab_left"] = int(players[o]["ab_left"]) + int(tb["battery"])
 	if team_kinds() >= GData.TEAM_KIT_BONUS:      # 팀 공구함이 서로 다른 6종 이상이면 자재 +1
 		for p in players:
 			p["mat"] = mini(int(p["mat"]) + 1, GData.MAT_MAX)
@@ -838,8 +844,10 @@ func _move_enemies(dt: float) -> void:
 			en["cell"] = ci
 			if float(d.get("trail", 0.0)) > 0.0:
 				ice_t[cell] = float(d["trail"])
-			if puddle_t.has(cell) and not (en["st"] as Dictionary).has("oil"):
-				_apply_status(en, "oil", int(puddle_t[cell][1]))
+			if puddle_t.has(cell):
+				var pst := str(puddle_t[cell][2]) if (puddle_t[cell] as Array).size() > 2 else "oil"
+				if not (en["st"] as Dictionary).has(pst):
+					_apply_status(en, pst, int(puddle_t[cell][1]))
 			_trap(en, cell)
 			if not enemies.has(en):
 				continue
@@ -882,6 +890,9 @@ func _trap(en: Dictionary, cell: Vector2i) -> void:
 					_hurt(e2, s, int(t["owner"]), true)
 		else:
 			_hurt(en, s, int(t["owner"]), true)
+		if float(s["knock"]) > 0.0 and enemies.has(en):      # 역회전: 한 칸 뒤로
+			en["dist"] = maxf(float(en["dist"]) - float(s["knock"]), 0.0)
+			en["cell"] = int(float(en["dist"]) + 0.5)
 		return
 
 
@@ -954,17 +965,40 @@ func _fire(dt: float) -> void:
 			continue
 		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
 		var owner := int(t["owner"])
-		if bool(s["support"]):      # 신호탑: 1초마다 주변 적에게 표식
+		if bool(s["support"]):      # 신호탑·탐조등: 1초마다 주변 적에게 표식 (섬광은 4초마다 기절)
 			t["cd"] = 1.0
+			if float(s["mark_r"]) <= 0.0:
+				continue
+			t["ticks"] = int(t.get("ticks", 0)) + 1
+			var flash := float(s["flash"]) > 0.0 and int(t["ticks"]) % 4 == 0
 			for en in enemies:
 				if _pos(en).distance_to(at) <= float(s["mark_r"]):
 					_apply_status(en, "mark", owner)
+					if flash and enemies.has(en):
+						en["stun"] = maxf(float(en["stun"]), float(s["flash"]) * (0.4 if GData.is_boss(en["type"]) else 1.0))
+			if flash:
+				fx.append({"k": "shot", "ty": "searchlight", "x": at.x, "y": at.y, "tx": at.x, "ty2": at.y, "r": s["mark_r"]})
 			continue
 		s["range"] = tower_range(t)
 		var target := _pick(at, float(s["range"]), str(t["prio"]))
 		if target.is_empty():
 			continue
 		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at))
+		if bool(s["st_alt"]):      # 증기탑: 냉기·화상 번갈아 (혼자서 열충격)
+			t["alt"] = not bool(t.get("alt", false))
+			s["st"] = "cold" if bool(t["alt"]) else "burn"
+		if str(s["st"]) == "shock":      # 발전기 근처 전기 포탑
+			var v := _volt_at(at)
+			s["dmg"] = float(s["dmg"]) * (1.0 + float(v[0]))
+			if int(s["chain"]) > 0:
+				s["chain"] = int(s["chain"]) + int(v[1])
+		if float(s["ramp"]) > 0.0:      # 절단기: 같은 적을 계속 쏘면 피해 누적
+			if int(t.get("ramp_id", -1)) == int(target["id"]):
+				t["ramp_n"] = int(t.get("ramp_n", 0)) + 1
+			else:
+				t["ramp_id"] = int(target["id"])
+				t["ramp_n"] = 0
+			s["dmg"] = float(s["dmg"]) * minf(1.0 + int(t["ramp_n"]) * 0.2, float(s["ramp"]))
 		if int(s["every"]) > 0:
 			t["shots"] = int(t.get("shots", 0)) + 1
 			if int(t["shots"]) % int(s["every"]) != 0:
@@ -976,7 +1010,7 @@ func _fire(dt: float) -> void:
 			var lane: Array = board.paths[int(target["e"])]
 			var ci := clampi(int(float(target["dist"]) + 0.5), 0, lane.size() - 1)
 			for k in [ci, mini(ci + 1, lane.size() - 1)]:
-				puddle_t[lane[k]] = [float(s["puddle"]), owner]
+				puddle_t[lane[k]] = [float(s["puddle"]), owner, str(s["puddle_st"])]
 				fx.append({"k": "puddle", "x": float(lane[k].x) + 0.5, "y": float(lane[k].y) + 0.5, "t": float(s["puddle"])})
 		if bool(s["aura"]):      # 범위 안 전부
 			fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": at.x, "ty2": at.y, "r": s["range"]})
@@ -1066,6 +1100,21 @@ func _signals() -> Array:
 	return out
 
 
+## 발전기 근처: [전기 피해 배율, 연쇄 추가]
+func _volt_at(at: Vector2) -> Array:
+	var v := 0.0
+	var ch := 0
+	for id in towers:
+		var g: Dictionary = towers[id]
+		if g["type"] != "generator" or float(g.get("heat", 0.0)) > 0.0:
+			continue
+		var gs := GData.tower_stats("generator", int(g["lv"]), str(g["branch"]))
+		if (Vector2(int(g["x"]), int(g["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(gs["range"]) + 0.01:
+			v = maxf(v, float(gs["volt"]))
+			ch = maxi(ch, int(gs["chain_up"]))
+	return [v, ch]
+
+
 ## 지휘소(신호탑 A) 근처 포탑 공격 속도
 func _haste_at(at: Vector2) -> float:
 	var h := 0.0
@@ -1095,9 +1144,12 @@ func tower_range(t: Dictionary) -> float:
 
 
 func _revealed(at: Vector2) -> bool:
-	for sg in _signals():
-		var ss := GData.tower_stats("signal", int(sg["lv"]), str(sg["branch"]))
-		if (Vector2(int(sg["x"]), int(sg["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]):
+	for id in towers:
+		var t: Dictionary = towers[id]
+		if float(t.get("heat", 0.0)) > 0.0:
+			continue
+		var ss := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
+		if bool(ss["reveal"]) and (Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]):
 			return true
 	return false
 
@@ -1190,9 +1242,14 @@ func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false, spread
 	if float(en["hp"]) <= 0.0:
 		_die(en, owner)
 		return
+	if float(s.get("stun", 0.0)) > 0.0:
+		en["stun"] = maxf(float(en.get("stun", 0.0)), float(s["stun"]) * (0.4 if GData.is_boss(en["type"]) else 1.0))
 	var st := str(s.get("st", ""))
 	if st != "" and not (st == "burn" and fireproof):
 		_apply_status(en, st, owner, float(s.get("st_mul", 1.0)), float(s.get("mag", GData.MAG_ARMOR)))
+	var st2 := str(s.get("st2", ""))
+	if st2 != "" and enemies.has(en):
+		_apply_status(en, st2, owner)
 
 
 ## 상태 붙이기: 다른 상태와 만나면 반응 (같은 적에 1초에 한 번)

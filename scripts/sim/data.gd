@@ -239,6 +239,54 @@ const TOWERS := {
 		"a": {"label": "지뢰", "desc": "터지며 화상", "dmg": 60.0, "range": 0.5, "trap": true, "uses": 3, "splash": 1.0, "fire": true, "st": "burn"},
 		"b": {"label": "끈끈이", "desc": "기름 + 감속", "dmg": 10.0, "range": 0.5, "trap": true, "uses": 60, "slow": 0.4, "st": "oil"},
 	},
+	"steam": {
+		"name": "증기탑", "role": "범위 지속", "cost": 130, "up": [100, 150], "art": 10,
+		"lv": [{"dmg": 3.0, "cd": 0.6, "range": 1.8, "aura": true, "st_alt": true}, {"dmg": 4.0, "cd": 0.5, "range": 1.8, "aura": true, "st_alt": true}],
+		"a": {"label": "압력솥", "desc": "5초마다 큰 분출", "dmg": 40.0, "cd": 5.0, "range": 2.4, "aura": true, "st_alt": true},
+		"b": {"label": "안개", "desc": "유령·굴착 적 드러냄", "dmg": 4.0, "cd": 0.5, "range": 2.2, "aura": true, "st": "cold", "reveal": true},
+	},
+	"crane": {
+		"name": "크레인탑", "role": "큰 적 처리", "cost": 150, "up": [120, 170], "art": 11,
+		"lv": [{"dmg": 34.0, "cd": 2.6, "range": 2.6, "phys": true}, {"dmg": 44.0, "cd": 2.4, "range": 2.6, "phys": true}],
+		"a": {"label": "들었다 놓기", "desc": "한 방 50 + 1초 기절", "dmg": 50.0, "cd": 2.4, "range": 2.6, "phys": true, "stun": 1.0},
+		"b": {"label": "자석 갈고리", "desc": "자성 + 뒤로 1칸", "dmg": 30.0, "cd": 2.2, "range": 2.6, "phys": true, "st": "mag", "push": 1.0},
+	},
+	"generator": {
+		"name": "발전기", "role": "보조", "cost": 100, "up": [80, 120], "art": 12,
+		"lv": [{"range": 2.0, "support": true, "volt": 0.2}, {"range": 2.5, "support": true, "volt": 0.3}],
+		"a": {"label": "고압 변전소", "desc": "주변 전기 연쇄 +2", "range": 2.5, "support": true, "volt": 0.3, "chain_up": 2},
+		"b": {"label": "비상 배터리", "desc": "긴급 냉각 +1회", "range": 2.5, "support": true, "volt": 0.2, "battery": 1},
+	},
+	"conveyor": {
+		"name": "컨베이어", "role": "길 위 함정", "cost": 80, "up": [60, 90], "art": 13,
+		"lv": [{"dmg": 4.0, "range": 0.5, "trap": true, "uses": 40, "slow": 0.2}, {"dmg": 6.0, "range": 0.5, "trap": true, "uses": 50, "slow": 0.25}],
+		"a": {"label": "역회전", "desc": "적을 1칸 뒤로", "dmg": 6.0, "range": 0.5, "trap": true, "uses": 30, "knock": 1.0},
+		"b": {"label": "속도 조절", "desc": "위의 적 감속 40%", "dmg": 6.0, "range": 0.5, "trap": true, "uses": 60, "slow": 0.4},
+	},
+	"welder": {
+		"name": "용접탑", "role": "근거리 빔", "cost": 140, "up": [110, 150], "art": 14,
+		"lv": [{"dmg": 4.0, "cd": 0.2, "range": 1.8, "fire": true, "st": "burn"}, {"dmg": 6.0, "cd": 0.2, "range": 1.8, "fire": true, "st": "burn"}],
+		"a": {"label": "플라스마", "desc": "화상 + 감전", "dmg": 6.0, "cd": 0.2, "range": 1.8, "fire": true, "st": "burn", "st2": "shock"},
+		"b": {"label": "절단기", "desc": "같은 적이면 피해 누적 ×3", "dmg": 6.0, "cd": 0.2, "range": 1.8, "phys": true, "ramp": 3.0},
+	},
+	"cryo": {
+		"name": "냉동 미사일", "role": "장거리 범위", "cost": 180, "up": [140, 180], "art": 15,
+		"lv": [{"dmg": 18.0, "cd": 2.4, "range": 5.0, "splash": 1.0, "st": "cold"}, {"dmg": 26.0, "cd": 2.2, "range": 5.0, "splash": 1.0, "st": "cold"}],
+		"a": {"label": "집속탄", "desc": "한 방 40 · 산산조각", "dmg": 42.0, "cd": 2.2, "range": 5.0, "splash": 0.6, "phys": true, "st": "cold"},
+		"b": {"label": "확산탄", "desc": "범위 2칸 냉기", "dmg": 16.0, "cd": 2.2, "range": 5.0, "splash": 2.0, "st": "cold"},
+	},
+	"searchlight": {
+		"name": "탐조등", "role": "보조", "cost": 90, "up": [70, 100], "art": 16,
+		"lv": [{"range": 3.0, "support": true, "reveal": true, "st": "mark", "mark_r": 3.0}, {"range": 3.5, "support": true, "reveal": true, "st": "mark", "mark_r": 3.5}],
+		"a": {"label": "서치라이트", "desc": "사거리 5칸", "range": 5.0, "support": true, "reveal": true, "st": "mark", "mark_r": 5.0},
+		"b": {"label": "섬광", "desc": "0.5초 기절 + 표식", "range": 3.0, "support": true, "reveal": true, "st": "mark", "mark_r": 3.0, "flash": 0.5},
+	},
+	"scrap": {
+		"name": "고철 투척기", "role": "범위 물리", "cost": 120, "up": [100, 140], "art": 17,
+		"lv": [{"dmg": 16.0, "cd": 1.4, "range": 3.0, "splash": 0.8, "phys": true, "st": "mag"}, {"dmg": 22.0, "cd": 1.3, "range": 3.0, "splash": 0.8, "phys": true, "st": "mag"}],
+		"a": {"label": "고철 더미", "desc": "맞은 자리 자성 장판 4초", "dmg": 22.0, "cd": 1.3, "range": 3.0, "splash": 0.8, "phys": true, "st": "mag", "puddle": 4.0, "puddle_st": "mag"},
+		"b": {"label": "강철구", "desc": "한 방 45 · 산산조각", "dmg": 45.0, "cd": 1.6, "range": 3.0, "phys": true},
+	},
 }
 
 # ── 상태와 반응 ──
@@ -295,10 +343,12 @@ static func reactions_with(st: String) -> Array:
 	return out
 
 
-const TOWER_ORDER := ["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"]
+const TOWER_ORDER := ["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike",
+	"steam", "crane", "generator", "conveyor", "welder", "cryo", "searchlight", "scrap"]
 const DEFAULT_KIT := ["gun", "cannon", "cold", "spike"]
 ## 테마가 지날수록 열리는 포탑 (초원은 기존 10종)
-const UNLOCK := [["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"], [], [], [], []]
+const UNLOCK := [["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"],
+	["steam", "cryo", "searchlight"], ["crane", "scrap", "welder"], ["generator", "conveyor"], []]
 
 
 static func unlocked(wave: int) -> Array:
@@ -475,6 +525,10 @@ static func tower_stats(type: String, level: int, branch: String) -> Dictionary:
 		"phys": bool(s.get("phys", false)), "every": int(s.get("every", 0)), "vs_mag": float(s.get("vs_mag", 0.0)),
 		"mag": float(s.get("mag", MAG_ARMOR)), "pull": float(s.get("pull", 0.0)), "push": float(s.get("push", 0.0)),
 		"puddle": float(s.get("puddle", 0.0)), "haste": float(s.get("haste", 0.0)), "mark_r": float(s.get("mark_r", 0.0)),
+		"st2": str(s.get("st2", "")), "st_alt": bool(s.get("st_alt", false)), "stun": float(s.get("stun", 0.0)),
+		"ramp": float(s.get("ramp", 0.0)), "volt": float(s.get("volt", 0.0)), "chain_up": int(s.get("chain_up", 0)),
+		"battery": int(s.get("battery", 0)), "knock": float(s.get("knock", 0.0)), "puddle_st": str(s.get("puddle_st", "oil")),
+		"flash": float(s.get("flash", 0.0)),
 	}
 
 

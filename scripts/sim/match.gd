@@ -1683,7 +1683,7 @@ func _tick_status(en: Dictionary, dt: float) -> void:
 	for k in stt.keys():
 		stt[k][0] = float(stt[k][0]) - dt
 		if k == "burn" and not bool(GData.ENEMIES[en["type"]].get("fireproof", false)):
-			_dot(en, GData.BURN_DPS * dt, int(stt[k][1]))
+			_dot(en, GData.BURN_DPS * rx_scale() * dt, int(stt[k][1]))
 			if not enemies.has(en):
 				return
 		if float(stt[k][0]) <= 0.0:
@@ -1691,6 +1691,11 @@ func _tick_status(en: Dictionary, dt: float) -> void:
 
 
 ## 이동 감속 합 (상한 60%, 감속 저항 반영)
+## 반응·화상 피해는 적 체력이 늘어나는 만큼 함께 커진다 (기준: 체력 배율 1.8, 1웨이브)
+func rx_scale() -> float:
+	return GData.hp_mul / 1.8 * GData.wave_hp(wave, players.size())
+
+
 func move_slow(en: Dictionary) -> float:
 	var stt: Dictionary = en.get("st", {})
 	var v := float(en["slow"])
@@ -1731,7 +1736,7 @@ func _react(rx: String, en: Dictionary, o1: int, o2: int) -> void:
 	var stt: Dictionary = en["st"]
 	var amp := stt.has("mark")
 	var mo := int(stt["mark"][1]) if amp else -1
-	var mul := (1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)) * (1.0 + _rx_boost)
+	var mul := (1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)) * (1.0 + _rx_boost) * rx_scale()
 	if amp:
 		mul *= 2.0
 	for o in [o1, o2]:

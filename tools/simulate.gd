@@ -1,38 +1,43 @@
 extends SceneTree
-## 밸런스 확인: 인원별로 포탑만 쓴 팀과 길까지 다시 그린 팀을 비교한다.
+## 밸런스 확인: 반응을 안 쓰는 팀(상태 없는 포탑 위주)과 반응을 잘 쓰는 팀을 웨이브 25까지 돌린다.
+## 목표: 안 쓰는 팀은 웨이브 12 전후, 잘 쓰는 팀은 20 이상.
+## 사용: godot --headless --path . -s res://tools/simulate.gd -- [hp_mul] [인원들 예: 2,4] [시드들 예: 11,23]
 
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
-	if args.size() > 0:
+	if args.size() > 0 and args[0] != "":
 		GData.hp_mul = float(args[0])
+	var ns := [2, 3, 4]
 	if args.size() > 1:
-		for k in GData.budget_scale:
-			GData.budget_scale[k] = float(GData.budget_scale[k]) * float(args[1])
-	print("hp_mul ", GData.hp_mul, " budget x", args[1] if args.size() > 1 else "1")
-	var seeds := [11]
-	for n in [2, 3, 4]:
+		ns = Array(args[1].split(",")).map(func(v): return int(v))
+	var seeds := [11, 23]
+	if args.size() > 2:
+		seeds = Array(args[2].split(",")).map(func(v): return int(v))
+	print("hp_mul ", GData.hp_mul)
+	for n in ns:
 		var a := []
 		var b := []
 		for sd in seeds:
-			a.append(_run(n, false, sd))
-			b.append(_run(n, true, sd))
-		print("%d인 | 포탑만: %s | 포탑+길: %s" % [n, " / ".join(a), " / ".join(b)])
+			GBot.use_reactions = false
+			a.append(_run(n, sd))
+			GBot.use_reactions = true
+			b.append(_run(n, sd))
+		print("%d인 | 반응 안 씀: %s | 반응 씀: %s" % [n, " / ".join(a), " / ".join(b)])
 	quit()
 
 
-func _run(players: int, roads: bool, sd: int) -> String:
+func _run(players: int, sd: int) -> String:
 	var names := []
-	var kits := []
-	var pool := [["gun", "cannon", "cold", "magnet", "spike"], ["shock", "flame", "oil", "sniper", "signal"],
-		["gun", "shock", "cold", "signal", "spike"], ["cannon", "flame", "oil", "magnet", "sniper"]]
 	for i in players:
 		names.append("P%d" % i)
-		kits.append(pool[i % pool.size()])
-	var m := GMatch.new(names, kits, sd)
+	var m := GMatch.new(names, [], sd)
+	m.auto_kits()
+	var roles := ["fire", "supply", "mech", "chief"]
+	for i in players:
+		m.players[i]["role"] = roles[i]
 	var guard := 0
-	var worst := ""
-	while m.phase != "over" and guard < 600000:
+	while m.phase != "over" and guard < 900000:
 		guard += 1
 		if m.phase == "reward":
 			for vk in m.players.size():
@@ -40,14 +45,13 @@ func _run(players: int, roads: bool, sd: int) -> String:
 		elif m.phase == "prep":
 			for s in players:
 				if m.phase == "prep":
-					GBot.play_prep(m, s, roads)
-			for s in players:          # 길을 고치면 전원 준비가 풀리므로 다시 준비
+					GBot.play_prep(m, s, true)
+			for s in players:
 				if m.phase == "prep":
 					m.apply(s, {"op": "ready", "v": true})
 		else:
-			var before := m.hp
 			m.step()
-	var lens := []
-	for p in m.board.paths:
-		lens.append(p.size())
-	return "%s W%d 성%d 길%s" % ["O" if m.cleared else "X", m.wave if not m.cleared else 25, m.hp, str(lens)]
+	var rx := 0
+	for k in m.rx_log:
+		rx += int(m.rx_log[k])
+	return "%s W%d 반응%d" % ["O" if m.cleared else "X", m.wave if not m.cleared else 25, rx]

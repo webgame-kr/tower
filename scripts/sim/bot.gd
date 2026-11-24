@@ -16,6 +16,10 @@ static func pick_kit(taken: Array) -> Array:
 	return kit
 
 
+const DAMAGE := ["gun", "cannon", "shock", "flame", "sniper", "crane", "welder", "cryo", "scrap", "steam"]
+static var use_reactions := true      # 시뮬레이션: false 면 상태 없는 포탑 위주 (반응을 안 쓰는 팀)
+
+
 ## 손패에서 4장: 화력 2 + 팀원 상태와 반응이 맞는 것 우선
 static func pick_hand(m: GMatch, seat: int) -> void:
 	var p: Dictionary = m.players[seat]
@@ -34,14 +38,21 @@ static func pick_hand(m: GMatch, seat: int) -> void:
 	for k in p["hand"]:
 		var st := str(GData.tower_stats(k, 1, "")["st"])
 		var v := 10.0 - prefer.find(k) * 0.5 if prefer.has(k) else 5.0
-		for o in team_st:
-			if st != "" and GData.reaction_of(st, o) != "":
-				v += 3.0
+		if not use_reactions:
+			v += 6.0 if st == "" else -6.0
+		else:
+			for o in team_st:
+				if st != "" and GData.reaction_of(st, o) != "":
+					v += 3.0
 		scored.append([v, k])
 	scored.sort_custom(func(a, b): return a[0] > b[0])
 	var kit := []
 	if str(p["lock"]) != "":
 		kit.append(p["lock"])
+	var dmg_rows := scored.filter(func(r): return DAMAGE.has(r[1]) and (use_reactions or str(GData.tower_stats(r[1], 1, "")["st"]) == ""))      # 화력 2장 먼저
+	for row in dmg_rows.slice(0, 2):
+		if kit.size() < GData.KIT_SIZE and not kit.has(row[1]):
+			kit.append(row[1])
 	for row in scored:
 		if kit.size() >= GData.KIT_SIZE:
 			break
@@ -54,6 +65,7 @@ static func pick_hand(m: GMatch, seat: int) -> void:
 ## suggest_only: 혼자 연습의 동료는 길을 직접 바꾸지 않고, 미리보기로 제안만 한다 (돌려준 값이 제안).
 static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := false) -> Dictionary:
 	pick_hand(m, seat)
+	_chip_joints(m, seat)
 	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
 	var suggestion := {}
 	if use_roads:
@@ -70,6 +82,19 @@ static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := f
 	_repair(m, seat)
 	m.apply(seat, {"op": "ready", "v": true})
 	return suggestion
+
+
+## 팀원이 세운 합동 설비 기초에 보탠다 (혼자서는 완성할 수 없으니)
+static func _chip_joints(m: GMatch, seat: int) -> void:
+	for id in m.towers.keys():
+		var t: Dictionary = m.towers[id]
+		if not GData.is_joint(str(t["type"])) or bool(t.get("done", false)):
+			continue
+		for _n in 4:
+			if bool(t.get("done", false)) or int(m.players[seat]["gold"]) < 140:
+				break
+			if m.apply(seat, {"op": "chip", "id": id}) != "":
+				break
 
 
 ## 보상 투표: 본부가 많이 다쳤으면 회복, 아니면 골드
@@ -90,14 +115,14 @@ static func _want(m: GMatch, seat: int, mine: Array) -> String:
 	for t in mine:
 		counts[t["type"]] = int(counts.get(t["type"], 0)) + 1
 	var order := []
-	for t in ["gun", "cannon", "shock", "flame", "sniper"]:
+	for t in DAMAGE:
 		if kit.has(t):
 			order.append(t)
 	if order.is_empty():
 		order = [kit[0]]
 	var want: String = order[mine.size() % order.size()]
-	for sup in ["cold", "magnet", "oil", "signal"]:
-		if kit.has(sup) and not counts.has(sup) and mine.size() >= 2 + ["cold", "magnet", "oil", "signal"].find(sup):
+	for sup in ["cold", "magnet", "oil", "signal", "searchlight", "generator"]:
+		if kit.has(sup) and not counts.has(sup) and mine.size() >= 2 + ["cold", "magnet", "oil", "signal", "searchlight", "generator"].find(sup):
 			return sup
 	if kit.has("spike") and int(counts.get("spike", 0)) < 1 + mine.size() / 5 and mine.size() >= 2:
 		return "spike"

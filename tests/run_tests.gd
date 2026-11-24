@@ -28,6 +28,7 @@ func _init() -> void:
 	_picks()
 	_new_towers()
 	_invest()
+	_roles()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -537,6 +538,72 @@ func _rx(a: String, b: String, o1 := 0, o2 := 0) -> Array:
 	m._apply_status(en, a, o1)
 	m._apply_status(en, b, o2)
 	return [m, en, near]
+
+
+func _roles() -> void:
+	var m := GMatch.new(["A", "B"])
+	m.players[0]["role"] = "chief"
+	m.players[1]["role"] = "supply"
+	var mat: int = m.players[0]["mat"]
+	var gold: int = m.players[1]["gold"]
+	m.wave = 1
+	m._finish_wave()
+	ok(int(m.players[0]["mat"]) == mini(mat + GData.MAT_WAVE + GData.CHIEF_MAT, GData.MAT_MAX), "반장: 공사 자재 웨이브당 +2")
+	ok(int(m.players[1]["gold"]) == gold + GData.wave_gold(1) + GData.SUPPLY_GOLD, "보급: 웨이브마다 +60골드")
+	var g0: int = m.players[0]["gold"]
+	ok(m.apply(1, {"op": "give", "to": 0, "n": 50}) == "" and int(m.players[0]["gold"]) == g0 + 60, "보급이 주면 +20%")
+	ok(m.apply(1, {"op": "role", "to": 0}) == "" and int(m.players[0].get("free_reroll", 0)) == 1, "보급품 투하: 다시 뽑기 1회 + 80골드")
+	ok(m.apply(1, {"op": "role", "to": 0}) != "", "R 은 웨이브당 1번")
+	# 반장이 있으면 다른 사람 자기 제안은 확정 불가, 팀원(반장)이 확정
+	var path := m.board.candidate(0, 8, "detour", -1)
+	m.apply(1, {"op": "draft", "e": 0, "path": Board.flat(path)})
+	ok(m.apply(1, {"op": "edit", "e": 0, "path": Board.flat(path)}) != "", "반장이 있으면 내 제안은 팀원이 확정")
+	ok(m.apply(0, {"op": "edit", "e": 0, "path": Board.flat(path)}) == "", "반장은 바로 확정")
+	# 정비: 투자 20% 할인
+	var mc := GMatch.new(["A", "B"])
+	mc.players[1]["role"] = "mech"
+	mc.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	var gid: int = mc.towers.keys()[0]
+	var mg: int = mc.players[1]["gold"]
+	mc.apply(1, {"op": "invest", "id": gid})
+	ok(int(mc.players[1]["gold"]) == mg - 16 and mc.invest_gauge(mc.towers[gid]) == 20, "정비: 25% 어치를 20% 싸게")
+	# 화력: 카드 7장, 피해 +10%
+	var fm := GMatch.new(["A", "B"])
+	fm.players[0]["role"] = "fire"
+	fm._deal()
+	ok((fm.players[0]["hand"] as Array).size() == 7, "화력: 고르기 카드 7장")
+	# 긴급 방벽: 적이 그 칸 앞에서 멈춤
+	var wm := GMatch.new(["A", "B"])
+	wm.players[0]["role"] = "chief"
+	wm.phase = "combat"
+	var cell: Vector2i = wm.board.paths[0][5]
+	ok(wm.apply(0, {"op": "role", "x": cell.x, "y": cell.y}) == "", "긴급 방벽 세우기")
+	var en := _enemy(1, 3.0)
+	wm.enemies = [en]
+	for _i in 40:
+		wm._move_enemies(0.1)
+	ok(float(en["dist"]) < 5.0, "방벽 앞에서 멈춤")
+	# 일제 사격: 반응 피해 2배
+	var vm := _rx("oil", "burn", 1, 1)
+	var base := 1000.0 - float(vm[2]["hp"])
+	var vf := GMatch.new(["A", "B"])
+	vf.players[1]["role"] = "fire"
+	vf.phase = "combat"
+	ok(vf.apply(1, {"op": "role"}) == "", "일제 사격")
+	var e1 := _enemy(1, 6.0)
+	e1["hp"] = 1000.0
+	var e2 := _enemy(2, 6.3)
+	e2["hp"] = 1000.0
+	vf.enemies = [e1, e2]
+	vf._apply_status(e1, "oil", 1)
+	vf._apply_status(e1, "burn", 1)
+	ok(is_equal_approx(1000.0 - float(e2["hp"]), base * 2.0), "일제 사격 중 반응 피해 x2")
+	# 연습 동료 역할
+	var solo := GSession.new(null, "나", "me")
+	solo.open_host(true)
+	ok(solo.start_match() != "", "역할을 안 고르면 시작 안 됨")
+	solo.set_seat({"role": "supply"})
+	ok(solo.start_match() == "" and str(solo.m.players[1]["role"]) == "mech", "연습 동료는 남은 역할 (보급 > 정비 > 화력 > 반장)")
 
 
 func _invest() -> void:

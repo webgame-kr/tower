@@ -50,6 +50,8 @@ func _run() -> void:
 	await _save("d_lobby")
 	var p := GSession.new(null, "민수", "me")
 	p.open_host(true)
+	p.set_seat({"role": "fire"})
+	p.start_match()
 	g.s = p
 	g._enter_game()
 	g._tut = -1

@@ -27,6 +27,7 @@ var rx_log: Dictionary = {}     # 반응 이름 -> 이번 판 횟수
 var seen_rx: Array = []         # 이번 판에 처음 나온 순서대로 (반응 도감)
 var joint_dmg := 0.0            # 다른 사람 포탑끼리 만든 반응 피해
 var puddle_t: Dictionary = {}   # 기름 웅덩이 칸 -> [남은 시간, 주인]
+var walls: Dictionary = {}      # 긴급 방벽 칸 -> 남은 시간 (적이 그 앞에서 멈춤)
 var hp_log: Array = []       # 웨이브마다 끝났을 때 본부 내구도 (결과 화면)
 var tower_log: Dictionary = {}  # 포탑 id -> [종류, 단계, 갈래, 주인, 피해, 처치] (결과 화면의 가장 일 많이 한 포탑)
 var undo_flags: Array = []   # 손님 사본: 자리별 되돌리기 가능 여부
@@ -55,6 +56,7 @@ func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
 		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
 			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
 			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0, "inv": 0,
+			"role": "", "r_used": false, "given": 0, "free_reroll": 0, "volley_t": 0.0,
 			"hand": [], "lock": "", "picked": false, "rerolls": 0})
 	_make_plan()
 	_deal()
@@ -71,6 +73,7 @@ func _deal() -> void:
 		p["hand"] = _hand_for(i, pool, used, rng)
 		p["picked"] = false
 		p["rerolls"] = 0
+		p["r_used"] = false
 		if str(p["lock"]) != "" and not (p["kit"] as Array).has(p["lock"]):
 			p["kit"] = [p["lock"]] + (p["kit"] as Array).slice(0, GData.KIT_SIZE - 1)
 
@@ -89,8 +92,22 @@ func _hand_for(seat: int, pool: Array, used: Dictionary, rng: RandomNumberGenera
 	return hand
 
 
-func hand_size(_seat: int) -> int:
-	return GData.HAND_SIZE
+func hand_size(seat: int) -> int:
+	return GData.HAND_SIZE + (1 if role_of(seat) == "fire" else 0)
+
+
+func role_of(seat: int) -> String:
+	if seat < 0 or seat >= players.size():
+		return ""
+	return str(players[seat].get("role", ""))
+
+
+## 반장이 있으면 다른 사람은 길을 제안만 하고, 반장(또는 다른 팀원)이 확정한다
+func chief_seat() -> int:
+	for i in players.size():
+		if role_of(i) == "chief" and players[i]["online"]:
+			return i
+	return -1
 
 
 ## 고르기 시작 전 첫 공구함: 손패 앞 4장 (혼자 연습·세션용)
@@ -146,6 +163,8 @@ func _reroll(seat: int) -> String:
 	if int(p["gold"]) < cost:
 		return "골드가 부족해요"
 	p["gold"] = int(p["gold"]) - cost
+	if int(p["rerolls"]) > 0 and int(p.get("free_reroll", 0)) > 0:
+		p["free_reroll"] = int(p["free_reroll"]) - 1
 	p["rerolls"] = int(p["rerolls"]) + 1
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash([seed_, wave, seat, int(p["rerolls"])])
@@ -161,7 +180,9 @@ func _reroll(seat: int) -> String:
 
 
 func reroll_cost(seat: int) -> int:
-	return 0 if int(players[seat]["rerolls"]) == 0 else GData.REROLL_COST
+	if int(players[seat]["rerolls"]) == 0 or int(players[seat].get("free_reroll", 0)) > 0:
+		return 0
+	return GData.REROLL_COST
 
 
 ## 팀 공구함 전체의 서로 다른 포탑 수
@@ -288,6 +309,11 @@ func apply(seat: int, c: Dictionary) -> String:
 		return _vote(seat, str(c.get("v", "")))
 	if op == "call":
 		return _call(seat, bool(c.get("v", true)))
+	if op == "role" or op == "give" or op == "invest":      # 전투 중에도
+		var e2 := _role_ability(seat, c) if op == "role" else (_give(seat, c) if op == "give" else _invest(seat, c))
+		if e2 == "":
+			version += 1
+		return e2
 	if phase != "prep":
 		return "준비 단계에서만 할 수 있어요"
 	var err := ""
@@ -305,6 +331,8 @@ func apply(seat: int, c: Dictionary) -> String:
 		"lock": err = _lock(seat, c)
 		"reroll": err = _reroll(seat)
 		"invest": err = _invest(seat, c)
+		"role": err = _role_ability(seat, c)
+		"give": err = _give(seat, c)
 		"noinv": err = _noinv(seat, c)
 		"ready": return _set_ready(seat, bool(c.get("v", true)))
 		_: return "알 수 없는 요청이에요"
@@ -363,6 +391,7 @@ func _call_early() -> void:
 		p["mat"] = mini(int(p["mat"]) + GData.MAT_WAVE, GData.MAT_MAX)
 		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": "", "early": bonus}
+	_role_income()
 	_log_hp()
 	fx.append({"k": "early", "n": bonus})
 	_advance()
@@ -522,6 +551,8 @@ func _invest(seat: int, c: Dictionary) -> String:
 
 ## 투자에 실제로 드는 돈 (정비 역할은 20% 할인)
 func invest_price(seat: int, pay: int) -> int:
+	if role_of(seat) == "mech":
+		return int(round(pay * (1.0 - GData.MECH_DISCOUNT)))
 	return pay
 
 
@@ -662,6 +693,11 @@ func _draft(seat: int, c: Dictionary) -> String:
 
 ## 확정: 늘어난 칸만큼 자재를 쓰고, 줄이면 돌려받는다. 같은 준비 단계 안에서는 되돌릴 수 있다.
 func _edit(seat: int, c: Dictionary) -> String:
+	var chief := chief_seat()
+	if chief >= 0 and chief != seat and drafts.has(seat) and _path_arg(c).is_empty():
+		return "반장이 있으면 길은 제안으로 · 팀원이 확정해요"
+	if chief >= 0 and chief != seat and drafts.has(seat) and Board.flat(_path_arg(c)) == drafts[seat]["path"]:
+		return "반장이 있으면 내 제안은 팀원이 확정해요"
 	var e := int(c.get("e", -1))
 	var path := _path_arg(c)
 	if path.is_empty() and drafts.has(seat):
@@ -697,6 +733,74 @@ func _edit(seat: int, c: Dictionary) -> String:
 	players[seat]["roads"] = int(players[seat].get("roads", 0)) + 1
 	for p in players:
 		p["ready"] = false
+	return ""
+
+
+func _role_income() -> void:
+	for i in players.size():
+		match role_of(i):
+			"chief":
+				players[i]["mat"] = mini(int(players[i]["mat"]) + GData.CHIEF_MAT, GData.MAT_MAX)
+			"supply":
+				players[i]["gold"] = int(players[i]["gold"]) + GData.SUPPLY_GOLD
+
+
+## 골드 주기 (보급은 +20% 더해서)
+func _give(seat: int, c: Dictionary) -> String:
+	var to := int(c.get("to", -1))
+	var n := int(c.get("n", 0))
+	if to < 0 or to >= players.size() or to == seat:
+		return "줄 사람을 골라 주세요"
+	if n <= 0 or n > int(players[seat]["gold"]):
+		return "골드가 부족해요"
+	players[seat]["gold"] = int(players[seat]["gold"]) - n
+	var got := n + (int(round(n * GData.GIVE_BONUS)) if role_of(seat) == "supply" else 0)
+	players[to]["gold"] = int(players[to]["gold"]) + got
+	players[seat]["given"] = int(players[seat].get("given", 0)) + got
+	fx.append({"k": "give", "by": seat, "to": to, "n": got})
+	return ""
+
+
+## R 능력 (웨이브당 1번)
+func _role_ability(seat: int, c: Dictionary) -> String:
+	var role := role_of(seat)
+	if role == "":
+		return "역할이 없어요"
+	if bool(players[seat].get("r_used", false)):
+		return "이번 웨이브에 이미 썼어요"
+	match role:
+		"chief":      # 긴급 방벽: 길 한 칸을 8초 막는다
+			if phase != "combat":
+				return "전투 중에만 쓸 수 있어요"
+			var cell := Vector2i(int(c.get("x", -1)), int(c.get("y", -1)))
+			if not board.is_path(cell):
+				return "길 칸을 골라 주세요"
+			walls[cell] = GData.WALL_TIME
+			fx.append({"k": "wall", "x": cell.x + 0.5, "y": cell.y + 0.5, "t": GData.WALL_TIME})
+		"supply":      # 보급품 투하: 팀원에게 다시 뽑기 1회 + 80골드
+			var to := int(c.get("to", -1))
+			if to < 0 or to >= players.size() or to == seat:
+				return "받을 팀원을 골라 주세요"
+			players[to]["gold"] = int(players[to]["gold"]) + GData.DROP_GOLD
+			players[to]["free_reroll"] = int(players[to].get("free_reroll", 0)) + 1
+			players[seat]["given"] = int(players[seat].get("given", 0)) + GData.DROP_GOLD
+			fx.append({"k": "give", "by": seat, "to": to, "n": GData.DROP_GOLD, "drop": true})
+		"mech":      # 과부하 운전: 포탑 하나 10초 공격 속도 2배
+			if phase != "combat":
+				return "전투 중에만 쓸 수 있어요"
+			var id := int(c.get("id", -1))
+			if not towers.has(id) or is_trap(towers[id]):
+				return "포탑을 골라 주세요"
+			towers[id]["over_t"] = GData.OVERLOAD_TIME
+			fx.append({"k": "overload", "id": id})
+		"fire":      # 일제 사격: 5초 동안 내 포탑 반응 피해 2배
+			if phase != "combat":
+				return "전투 중에만 쓸 수 있어요"
+			players[seat]["volley_t"] = GData.VOLLEY_TIME
+			fx.append({"k": "volley", "by": seat})
+	players[seat]["r_used"] = true
+	players[seat]["support"] += 1
+	version += 1
 	return ""
 
 
@@ -947,7 +1051,12 @@ func _move_enemies(dt: float) -> void:
 			boost = float(d.get("ice", GData.ICE_SPEED))
 		var slow := move_slow(en)
 		if float(en.get("stun", 0.0)) <= 0.0:
-			en["dist"] += float(d["speed"]) * GData.SPEED_MUL * boost * (1.0 - slow) * dt
+			var nd: float = float(en["dist"]) + float(d["speed"]) * GData.SPEED_MUL * boost * (1.0 - slow) * dt
+			if not walls.is_empty():
+				var wi := ci + 1
+				if wi < path.size() and walls.has(path[wi]) and nd > wi - 0.6:
+					nd = maxf(float(en["dist"]), wi - 0.6)
+			en["dist"] = nd
 		if on_lava(cell) and not bool(d.get("fireproof", false)):
 			en["hp"] = float(en["hp"]) - float(en["max"]) * GData.LAVA_RATE * dt
 			if float(en["hp"]) <= 0.0:
@@ -1064,8 +1173,17 @@ func _pos(en: Dictionary) -> Vector2:
 
 
 func _fire(dt: float) -> void:
+	for p in players:
+		if float(p.get("volley_t", 0.0)) > 0.0:
+			p["volley_t"] = float(p["volley_t"]) - dt
+	for k in walls.keys():
+		walls[k] = float(walls[k]) - dt
+		if float(walls[k]) <= 0.0:
+			walls.erase(k)
 	for id in towers:
 		var t: Dictionary = towers[id]
+		if float(t.get("over_t", 0.0)) > 0.0:
+			t["over_t"] = float(t["over_t"]) - dt
 		if float(t.get("heat", 0.0)) > 0.0:
 			t["heat"] = float(t["heat"]) - dt
 			continue
@@ -1096,7 +1214,9 @@ func _fire(dt: float) -> void:
 		var target := _pick(at, float(s["range"]), str(t["prio"]))
 		if target.is_empty():
 			continue
-		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at))
+		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at)) / (2.0 if float(t.get("over_t", 0.0)) > 0.0 else 1.0)
+		if role_of(owner) == "fire":
+			s["dmg"] = float(s["dmg"]) * (1.0 + GData.FIRE_DMG)
 		if bool(s["st_alt"]):      # 증기탑: 냉기·화상 번갈아 (혼자서 열충격)
 			t["alt"] = not bool(t.get("alt", false))
 			s["st"] = "cold" if bool(t["alt"]) else "burn"
@@ -1450,6 +1570,10 @@ func _react(rx: String, en: Dictionary, o1: int, o2: int) -> void:
 	var mul := 1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)
 	if amp:
 		mul *= 2.0
+	for o in [o1, o2]:
+		if int(o) >= 0 and int(o) < players.size() and float(players[int(o)].get("volley_t", 0.0)) > 0.0:
+			mul *= 2.0
+			break
 	var owners := [o1, o2]
 	if amp:
 		owners.append(mo)
@@ -1551,6 +1675,7 @@ func _finish_wave() -> void:
 		p["mat"] = mini(int(p["mat"]) + GData.MAT_WAVE, GData.MAT_MAX)
 		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
+	_role_income()
 	_log_hp()
 	if wave >= GData.LAST_WAVE:
 		cleared = true
@@ -1619,7 +1744,7 @@ func to_data() -> Dictionary:
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
 		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "gd": gate_dmg,
-		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "rl": rx_log, "sr": seen_rx, "jd": snappedf(joint_dmg, 1.0), "tl": _tower_log_data()}
+		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "wl": _walls_data(), "rl": rx_log, "sr": seen_rx, "jd": snappedf(joint_dmg, 1.0), "tl": _tower_log_data()}
 
 
 func _ice_data() -> Array:
@@ -1657,6 +1782,10 @@ func load_data(d: Dictionary) -> void:
 		p["lock"] = str(p.get("lock", ""))
 		p["picked"] = bool(p.get("picked", false))
 		p["rerolls"] = int(p.get("rerolls", 0))
+		p["role"] = str(p.get("role", ""))
+		p["r_used"] = bool(p.get("r_used", false))
+		p["given"] = int(p.get("given", 0))
+		p["free_reroll"] = int(p.get("free_reroll", 0))
 	towers = {}
 	for r in d["tw"]:
 		towers[int(r[0])] = {"id": int(r[0]), "owner": int(r[1]), "type": str(r[2]), "x": int(r[3]), "y": int(r[4]),
@@ -1689,6 +1818,9 @@ func load_data(d: Dictionary) -> void:
 	_can_call = bool(d.get("cc", false))
 	undo_flags = d.get("un", [])
 	_rq = d.get("rq", [])
+	walls = {}
+	for w in d.get("wl", []):
+		walls[Vector2i(int(w[0]), int(w[1]))] = float(w[2])
 	rx_log = {}
 	var rl: Dictionary = d.get("rl", {})
 	for k in rl:
@@ -1731,6 +1863,13 @@ func load_enemies(rows: Array) -> void:
 			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "st": stt,
 			"stun": 1.0 if r.size() > 9 and bool(r[9]) else 0.0, "sh": float(r[10]) if r.size() > 10 else 0.0,
 			"sk": float(r[11]) if r.size() > 11 else 0.0, "cell": -1, "done": [], "rx_t": 0.0})
+
+
+func _walls_data() -> Array:
+	var out := []
+	for k in walls:
+		out.append([k.x, k.y, snappedf(float(walls[k]), 0.1)])
+	return out
 
 
 func _int_keys(d: Dictionary) -> Dictionary:

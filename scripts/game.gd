@@ -127,6 +127,9 @@ var pick_btns: Array = []
 var lock_btns: Array = []
 var pick_go: Button
 var invest_btn: Button
+var role_btn: Button
+var role_pick_btns: Array = []
+var give_btns: Array = []
 var noinv_btn: Button
 var _sell_armed := -1          # 남이 투자한 포탑: 한 번 더 눌러야 판매
 var _inv_note := ""
@@ -478,6 +481,8 @@ func _build_lobby() -> void:
 		diff_btns[k] = _btn(lobby, Rect2(), str(GData.DIFFICULTY[k][2]), _on_diff.bind(k), "sec", T.BODY)
 		diff_btns[k].toggle_mode = true
 	_btn(lobby, Rect2(638, 600, 176, 56), "나가기     ", _on_leave, "sec", T.BODY)
+	for i in GData.ROLE_ORDER.size():
+		role_pick_btns.append(_btn(lobby, Rect2(332 + i * 166, 354, 160, 158), "", _on_role_pick.bind(GData.ROLE_ORDER[i]), "clear"))
 	start_btn = _btn(lobby, Rect2(828, 560, 442, 96), "", _on_start, "pri", T.BODY)
 
 
@@ -512,6 +517,11 @@ func _build_hud() -> void:
 	confirm_btn = _btn(hud, Rect2(28, 212, 116, 34), "", _on_confirm, "pri", T.LABEL)
 	cancel_btn = _btn(hud, Rect2(148, 212, 56, 34), "", _on_cancel_draft, "sec", T.LABEL)
 	ability_btn = _btn(hud, Rect2(186, 624, 132, 74), "", _set_mode.bind("ability"), "clear")
+	role_btn = _btn(hud, Rect2(674, 632, 76, 78), "", _on_role_ability, "clear")
+	for i in GSession.MAX_SEATS:
+		var gb := _btn(hud, Rect2(), "", _on_give.bind(i), "clear")
+		gb.tooltip_text = "클릭: 50골드 주기"
+		give_btns.append(gb)
 	accept_btn = _btn(hud, Rect2(), "", _on_accept, "pri", T.LABEL)
 	reject_btn = _btn(hud, Rect2(), "", _on_reject, "sec", T.LABEL)
 	quick_btn = _btn(hud, Rect2(), "", _on_quick, "clear")
@@ -775,7 +785,7 @@ func _on_join() -> void:
 func _on_solo() -> void:
 	s = GSession.new(null, _player_name(), "me")
 	s.open_host(true)
-	_enter_game()
+	_show("lobby")
 
 
 func _on_copy_code() -> void:
@@ -831,6 +841,13 @@ func _on_diff(k: String) -> void:
 func _on_lobby_ready() -> void:
 	if s.seat >= 0 and s.seat < s.seats.size():
 		s.set_seat({"ready": not bool(s.seats[s.seat]["ready"])})
+
+
+func _on_role_pick(r: String) -> void:
+	if s == null or s.seat < 0 or s.seat >= s.seats.size():
+		return
+	var mine := str(s.seats[s.seat].get("role", ""))
+	s.set_seat({"role": "" if mine == r else r})
 
 
 func _on_start() -> void:
@@ -1177,7 +1194,11 @@ func _update_lobby(delta: float) -> void:
 		diff_btns[k].set_pressed_no_signal(s.difficulty == k)
 		di += 1
 	start_btn.visible = true
-	start_btn.disabled = not s.is_host or s.seats.size() < 2 or ready_n < s.seats.size()
+	var roles_ok := true
+	for st in s.seats:
+		if str(st.get("role", "")) == "" and not (s.solo and str(st["token"]) == "bot"):
+			roles_ok = false
+	start_btn.disabled = not s.is_host or s.seats.size() < 2 or ready_n < s.seats.size() or not roles_ok
 	start_btn.text = ""
 	_place()
 	if web and not _kit_sent and mine >= 0 and mine < s.seats.size():
@@ -1302,6 +1323,10 @@ func _take_fx() -> void:
 			"newrx":
 				_newrx = str(f["n"])
 				_newrx_t = 2.0
+			"give":
+				if int(f["to"]) == s.seat:
+					_inv_note = "%s이 %d골드%s" % [str(s.m.players[int(f["by"])]["name"]).left(6), int(f["n"]), " · 다시 뽑기 1회" if bool(f.get("drop", false)) else ""]
+					_inv_note_t = 2.0
 			"invest":
 				if int(f["o"]) == s.seat and s.m.towers.has(int(f["id"])):
 					var tt: Dictionary = s.m.towers[int(f["id"])]
@@ -1567,6 +1592,15 @@ func _update_hud() -> void:
 	confirm_btn.disabled = not can_road or any_draft.is_empty()
 	cancel_btn.disabled = not m.drafts.has(s.seat) and _trail.is_empty()
 	ability_btn.disabled = m.phase != "combat" or bool(me["used"])
+	var role := m.role_of(s.seat)
+	_vis(role_btn, role != "")
+	role_btn.disabled = bool(me.get("r_used", false)) or (role != "supply" and m.phase != "combat")
+	var team: Rect2 = _ly()["team"]
+	for i in give_btns.size():
+		var on := i < m.players.size() and i != s.seat
+		_vis(give_btns[i], on)
+		give_btns[i].position = Vector2(team.position.x + 10, team.position.y + 36 + i * 26)
+		give_btns[i].size = Vector2(team.size.x - 20, 26)
 	ready_btn.visible = prep
 	ready_btn.disabled = locked
 	if prep:
@@ -1779,6 +1813,30 @@ func _on_sell() -> void:
 	_sell_armed = -1
 	s.command({"op": "sell", "id": selected})
 	selected = -1
+
+
+func _on_role_ability() -> void:
+	var m := s.m
+	match m.role_of(s.seat):
+		"chief":
+			_set_mode("role:wall")
+		"mech":
+			_set_mode("role:over")
+		"fire":
+			s.command({"op": "role"})
+		"supply":      # 골드가 가장 적은 팀원에게
+			var best := -1
+			for i in m.players.size():
+				if i != s.seat and m.players[i]["online"] and (best < 0 or int(m.players[i]["gold"]) < int(m.players[best]["gold"])):
+					best = i
+			if best >= 0:
+				s.command({"op": "role", "to": best})
+
+
+func _on_give(i: int) -> void:
+	if s.m == null or i == s.seat or i >= s.m.players.size():
+		return
+	s.command({"op": "give", "to": i, "n": 50})
 
 
 func _on_invest() -> void:
@@ -2059,6 +2117,14 @@ func _click(grid: Vector2) -> void:
 	elif mode == "ability":
 		s.command({"op": "ability", "x": grid.x, "y": grid.y})
 		mode = ""
+	elif mode == "role:wall":
+		s.command({"op": "role", "x": c.x, "y": c.y})
+		mode = ""
+	elif mode == "role:over":
+		var cells := s.m.tower_cells()
+		if cells.has(c):
+			s.command({"op": "role", "id": int(cells[c])})
+		mode = ""
 	elif mode.begins_with("ping:"):
 		s.command({"op": "ping", "kind": mode.substr(5), "x": grid.x, "y": grid.y})
 		mode = ""
@@ -2157,6 +2223,9 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 			if confirm_btn.visible and not confirm_btn.disabled:
 				_on_confirm()
 		KEY_Q: _key_mode("ability", ability_btn)
+		KEY_R:
+			if role_btn.visible and not role_btn.disabled:
+				_on_role_ability()
 		KEY_F1, KEY_F2, KEY_F3, KEY_F4:
 			var e: int = ev.keycode - KEY_F1
 			if e < s.m.board.paths.size():
@@ -3289,6 +3358,8 @@ func _draw_lobby() -> void:
 	var cr := Rect2(942, 14, 328, 46)
 	_nine(cr, "panel_dark")
 	var code: String = _room_code() if s.is_host or net.code() != "" else "연결 중"
+	if s.solo:
+		code = "혼자 연습"
 	if s.is_host and net.status() != "hosting":
 		code = "여는 중…" if net.status() != "error" else "실패"
 	_tx(Rect2(cr.position + Vector2(12, 0), Vector2(80, cr.size.y)), "방 코드", T.LABEL, SUB)
@@ -3321,7 +3392,11 @@ func _draw_lobby() -> void:
 	_t(ck.position + Vector2(12, 6), "시작 전 확인", T.LABEL, AMBER)
 	var lines := []
 	lines.append([n >= 2, "팀원 %d명 · %d인 지도" % [n, maxi(n, 2)] if n >= 2 else "팀원이 1명 · 친구를 불러요"])
-	lines.append([true, "포탑 카드는 웨이브마다 골라요"])
+	var picked_roles := 0
+	for st in s.seats:
+		if str(st.get("role", "")) != "" or (s.solo and str(st["token"]) == "bot"):
+			picked_roles += 1
+	lines.append([picked_roles == n, "역할 %d/%d 고름" % [picked_roles, n] if picked_roles < n else "역할 모두 고름" + (" · 연습 동료는 자동" if s.solo else "")])
 	var waiting := []
 	for i in n:
 		if not s.seats[i]["ready"]:
@@ -3380,6 +3455,11 @@ func _draw_crew(i: int) -> void:
 	var role := "방장" if i == 0 else "손님"
 	if i == s.seat:
 		role += " · 나"
+	var rk := str(s.seats[i].get("role", ""))
+	if rk != "":
+		role += " · " + str(GData.ROLES[rk]["name"])
+	elif s.solo and str(s.seats[i]["token"]) == "bot":
+		role += " · 역할 자동"
 	_tx(Rect2(at + Vector2(10, 40), Vector2(140, 24)), role, T.LABEL, SUB)
 	for c in 4:
 		var r := Rect2(at + Vector2(10 + c * 28, 70), Vector2(24, 24))
@@ -3403,19 +3483,49 @@ func _draw_crew(i: int) -> void:
 func _draw_lobby_kit() -> void:
 	var r := Rect2(322, 318, 676, 202)
 	_nine(r, "panel_steel")
-	_tx(Rect2(r.position + Vector2(10, 8), Vector2(r.size.x - 20, 24)), "포탑은 게임 중에 골라요", T.LABEL, SUB)
-	_tx(Rect2(r.position + Vector2(10, 36), Vector2(r.size.x - 20, 28)), "준비가 시작될 때마다 카드 6장 중 4장 · 잠금 1칸 · 다시 뽑기", T.LABEL, INK)
-	_tx(Rect2(r.position + Vector2(10, 66), Vector2(r.size.x - 20, 24)), "팀원 포탑과 반응이 맞는 카드엔 그 사람 색으로 표시돼요", T.LABEL, AMBER)
-	var col := int(s.seats[maxi(s.seat, 0)]["col"]) % 4 if s.seat >= 0 and s.seat < s.seats.size() else 0
-	var pool := GData.unlocked(1)
-	for i in pool.size():
-		var cell := Rect2(r.position + Vector2(10 + i * 66, 100), Vector2(60, 92))
-		_nine(cell, "panel_dark")
-		_tower_icon(pool[i], 1, "", col, Rect2(cell.position + Vector2(5, 4), Vector2(50, 50)))
-		var st := str(GData.tower_stats(pool[i], 1, "")["st"])
-		if st != "":
-			_prect(Rect2(cell.position + Vector2(24, 60), Vector2(12, 12)), OUTLINE)
-			_prect(Rect2(cell.position + Vector2(26, 62), Vector2(8, 8)), Color(str(GData.STATUS[st]["col"])))
+	var mine := str(s.seats[s.seat].get("role", "")) if s.seat >= 0 and s.seat < s.seats.size() else ""
+	_tx(Rect2(r.position + Vector2(10, 8), Vector2(r.size.x - 20, 24)), "역할 고르기 · 같은 역할은 한 명만 · R 능력은 웨이브당 1번", T.LABEL, SUB)
+	for i in GData.ROLE_ORDER.size():
+		var key: String = GData.ROLE_ORDER[i]
+		var rd: Dictionary = GData.ROLES[key]
+		var c := Rect2(332 + i * 166, 354, 160, 158)
+		var who := -1
+		for k in s.seats.size():
+			if str(s.seats[k].get("role", "")) == key:
+				who = k
+		_nine(c, "panel_dark")
+		if mine == key:
+			_prect(c.grow(-2), Color("3A3024"))
+			_prect(c.grow(-2), AMBER, false, 2.0)
+		elif role_pick_btns[i].is_hovered() and who < 0:
+			_prect(c.grow(-2), Color("8C939A"), false, 2.0)
+		_prect(Rect2(c.position + Vector2(8, 10), Vector2(14, 14)), OUTLINE)
+		_prect(Rect2(c.position + Vector2(10, 12), Vector2(10, 10)), Color(str(rd["col"])))
+		_tx(Rect2(c.position + Vector2(28, 4), Vector2(c.size.x - 36, 28)), str(rd["name"]), T.STRONG, INK if who < 0 or who == s.seat else SUB)
+		if who >= 0:
+			_prect(Rect2(c.end.x - 22, c.position.y + 10, 14, 14), OUTLINE)
+			_prect(Rect2(c.end.x - 20, c.position.y + 12, 10, 10), OWNER[int(s.seats[who]["col"]) % 4])
+		var lines := _wrap(str(rd["passive"]), T.LABEL, c.size.x - 16)
+		for j in mini(lines.size(), 3):
+			_tx(Rect2(c.position + Vector2(8, 36 + j * 22), Vector2(c.size.x - 16, 22)), lines[j], T.LABEL, SUB)
+		_tx(Rect2(c.position + Vector2(8, 108), Vector2(c.size.x - 16, 22)), "R · %s" % rd["ability"], T.LABEL, AMBER)
+		_tx(Rect2(c.position + Vector2(8, 130), Vector2(c.size.x - 16, 22)), str(rd["job"]), T.LABEL, Color("8C939A"))
+
+
+## 폭에 맞춰 줄 나누기 (어절 단위)
+func _wrap(text: String, st: int, w: float) -> Array:
+	var out := []
+	var line := ""
+	for word in text.split(" "):
+		var next := word if line == "" else line + " " + word
+		if _sz(next, st).x > w and line != "":
+			out.append(line)
+			line = word
+		else:
+			line = next
+	if line != "":
+		out.append(line)
+	return out
 
 
 func _dashed_rect(r: Rect2, col: Color) -> void:
@@ -3509,6 +3619,13 @@ func _draw_game() -> void:
 			_draw_tower(m, row[2])
 		else:
 			_draw_enemy(m, row[2])
+	for wc in m.walls:      # 긴급 방벽
+		var wa := _p(Vector2(wc))
+		_prect(Rect2(wa + Vector2(2, CELL * 0.3), Vector2(CELL - 4, CELL * 0.4)), OUTLINE)
+		_hazard(Rect2(_ev(wa + Vector2(4, CELL * 0.3 + 2)), _ev(Vector2(CELL - 8, CELL * 0.4 - 4))))
+	for id in m.towers:      # 과부하 포탑
+		if float(m.towers[id].get("over_t", 0.0)) > 0.0 and int(_tick * 6.0) % 2 == 0:
+			_corners(_p(Vector2(int(m.towers[id]["x"]), int(m.towers[id]["y"]))), AMBER)
 	_draw_fx()
 	_draw_env()                        # 07 환경 효과
 	_draw_pings()                      # 08 선택·핑·건설 정보
@@ -3887,6 +4004,8 @@ func _layout_hud() -> void:
 	for i in slot_btns.size():
 		slot_btns[i].position = Vector2(L["slot_x"] + i * L["slot_gap"], L["slot_y"])
 		slot_btns[i].size = sl
+	role_btn.position = Vector2(674, 632)
+	role_btn.size = Vector2(76, 78)
 	var kr: Rect2 = L["kit"]
 	build_btns["kit"].position = kr.position
 	build_btns["kit"].size = kr.size
@@ -3955,7 +4074,10 @@ func _draw_team(m: GMatch) -> void:
 		var col := int(p.get("col", i)) % 4
 		_prect(Rect2(row.position + Vector2(0, 7), Vector2(12, 12)), OUTLINE)
 		_prect(Rect2(row.position + Vector2(2, 9), Vector2(8, 8)), OWNER[col])
-		_tx(Rect2(row.position + Vector2(20, 0), Vector2(row.size.x - 80, 26)), str(p["name"]).left(6), T.LABEL, INK if p["online"] else SUB)
+		_tx(Rect2(row.position + Vector2(20, 0), Vector2(row.size.x - 80, 26)), str(p["name"]).left(4), T.LABEL, INK if p["online"] else SUB)
+		var rk := str(p.get("role", ""))
+		if rk != "":
+			_tx(Rect2(row.position + Vector2(104, 0), Vector2(60, 26)), str(GData.ROLES[rk]["name"]), T.LABEL, Color(str(GData.ROLES[rk]["col"])))
 		var dot := OK_GREEN if (p["ready"] or (m.phase == "reward" and str(p.get("vote", "")) != "")) else Color("4A4640")
 		if not p["online"]:
 			dot = LAMP
@@ -4125,6 +4247,12 @@ func _draw_hint(m: GMatch) -> void:
 		head = "길 다시 그리기"
 		val = "자재 %d" % int(m.players[s.seat].get("mat", 0))
 		sub = "길 위 칸에서 끌기"
+	elif mode == "role:wall":
+		head = "긴급 방벽"
+		sub = "막을 길 칸 클릭 · 8초"
+	elif mode == "role:over":
+		head = "과부하 운전"
+		sub = "포탑 클릭 · 10초 공격 속도 x2"
 	elif mode.begins_with("move:"):
 		head = "옮기기"
 		sub = "놓을 빈 칸 · 무료"
@@ -4143,6 +4271,10 @@ func _draw_hint(m: GMatch) -> void:
 		if ability_btn.is_hovered():
 			head = "긴급 냉각"
 			sub = "전투 중 1회 · 반경 %.1f칸" % GData.ABILITY_RADIUS
+		if role_btn.visible and role_btn.is_hovered():
+			var rd: Dictionary = GData.ROLES[m.role_of(s.seat)]
+			head = "%s · %s" % [rd["name"], rd["ability"]]
+			sub = str(rd["ab_desc"])
 		for i in ping_btns.size():
 			if ping_btns[i].is_hovered():
 				head = str(GData.PING_KINDS[PING_ORDER[i]])
@@ -4219,6 +4351,17 @@ func _draw_bar_art(m: GMatch) -> void:
 		_prect(ab.grow(-2), AMBER, false, 2.0)
 	_icon(Vector2i(0, 0), Rect2(ab.position + Vector2((ab.size.x - 32) * 0.5, 8), Vector2(32, 32)), Color.WHITE if usable or on else Color(0.6, 0.6, 0.6))
 	_key_chip(Vector2(ab.get_center().x - 11, ab.end.y - 30), "Q")
+	# 역할 R 칸
+	if role_btn.visible:
+		var rb := Rect2(role_btn.position, role_btn.size)
+		var rd: Dictionary = GData.ROLES[m.role_of(s.seat)]
+		var ready_r: bool = not role_btn.disabled
+		_nine(rb, "panel_steel")
+		if ready_r or mode.begins_with("role:"):
+			_prect(rb.grow(-2), Color(str(rd["col"])), false, 2.0)
+		_prect(Rect2(rb.position + Vector2(rb.size.x * 0.5 - 12, 10), Vector2(24, 24)), OUTLINE)
+		_prect(Rect2(rb.position + Vector2(rb.size.x * 0.5 - 10, 12), Vector2(20, 20)), Color(str(rd["col"])) if ready_r else Color("4A4640"))
+		_key_chip(Vector2(rb.get_center().x - 11, rb.end.y - 30), "R")
 	# 공구함 칸: 머리 그림 + 번호·값
 	var names: Array = me["kit"]
 	for i in names.size():
@@ -4776,10 +4919,16 @@ func _draw_result() -> void:
 		_prect(Rect2(row.position + Vector2(14, sq_y + 2), Vector2(16, 16)), OWNER[col])
 		_tx(Rect2(row.position + Vector2(42, 6 if n <= 2 else 0), Vector2(140, 28 if n <= 2 else row.size.y)), str(p["name"]).left(6), T.STRONG, INK)
 		var badge := ""
-		if i == top_road:
-			badge = "길 담당"
-		elif i == top_dmg:
-			badge = "최다 피해"
+		match str(p.get("role", "")):
+			"chief": badge = "반장 · 길 %d번" % int(p.get("roads", 0))
+			"supply": badge = "보급 · %d골드" % int(p.get("given", 0))
+			"mech": badge = "정비 · 투자 %d" % int(p.get("inv", 0))
+			"fire": badge = "화력 · 피해 %s" % _kilo(float(p["dmg"]))
+		if badge == "":
+			if i == top_road:
+				badge = "길 담당"
+			elif i == top_dmg:
+				badge = "최다 피해"
 		if badge != "" and n <= 2:
 			var bwid := _ev(Vector2(_sz(badge, T.LABEL).x + 12, 0)).x
 			_prect(Rect2(row.position + Vector2(42, 42), Vector2(bwid, 22)), AMBER)

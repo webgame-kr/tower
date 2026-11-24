@@ -162,9 +162,9 @@ func _online() -> void:
 	var d := join("d", "td", "1")
 	ok(d.seat == 3 and host.seats.size() == 4, "빈자리에 다시 입장")
 	ok(host.start_match() != "", "전원 준비 전 시작 불가")
-	host.set_seat({"ready": true})
-	for g in guests:
-		g.set_seat({"ready": true})
+	host.set_seat({"ready": true, "role": "chief"})
+	for gi in guests.size():
+		guests[gi].set_seat({"ready": true, "role": ["supply", "mech", "fire"][gi]})
 	pump()
 	ok(host.start_match() == "", "4인 시작")
 	pump()

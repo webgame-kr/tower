@@ -32,6 +32,8 @@ func _run() -> void:
 	await process_frame
 	var p := GSession.new(null, "플레이어", "me")
 	p.open_host(true)
+	p.set_seat({"role": "fire"})
+	p.start_match()
 	g.s = p
 	g._enter_game()
 	g._tut = -1

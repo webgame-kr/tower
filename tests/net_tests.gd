@@ -59,8 +59,8 @@ func _init() -> void:
 	c.set_seat({"col": 0})
 	pump(h, c)
 	ok(int(h.seats[1]["col"]) == 1, "이미 쓰인 색은 고를 수 없음")
-	c.set_seat({"col": 3, "name": "새이름", "ready": true})
-	h.set_seat({"ready": true})
+	c.set_seat({"col": 3, "name": "새이름", "ready": true, "role": "supply"})
+	h.set_seat({"ready": true, "role": "fire"})
 	pump(h, c)
 	ok(int(c.seats[1]["col"]) == 3 and c.seats[1]["name"] == "새이름", "로비 색·이름 반영")
 	ok(h.start_match() == "", "경기 시작")
@@ -143,6 +143,8 @@ func _init() -> void:
 
 	var solo := GSession.new(null, "나", "me")
 	solo.open_host(true)
+	solo.set_seat({"role": "fire"})
+	solo.start_match()
 	for _i in 10:
 		solo.tick(0.05)
 	ok(solo.m.players[1]["ready"] == true and solo.m.towers.size() > 0, "연습 동료가 준비")

@@ -51,6 +51,8 @@ func _run() -> void:
 	# 2인 혼자 연습
 	var play := GSession.new(null, "민수", "me")
 	play.open_host(true)
+	play.set_seat({"role": "fire"})
+	play.start_match()
 	play.m.players[1]["name"] = "지우"
 	g.s = play
 	g._enter_game()

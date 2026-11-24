@@ -366,6 +366,24 @@ static func fresh_unlocks(wave: int) -> Array:
 		return []
 	return (UNLOCK[mini(theme_of(wave), UNLOCK.size() - 1)] as Array).filter(func(k): return TOWERS.has(k))
 const TRAP_REPAIR := 1
+## 역할: 대기실에서 하나씩, 같은 역할은 한 명만. 패시브 1 + 웨이브당 1번 R 능력
+const ROLES := {
+	"chief": {"name": "반장", "passive": "공사 자재 웨이브당 +2 · 길을 제안 없이 바로 확정", "ability": "긴급 방벽", "ab_desc": "길 한 칸을 8초 막아 적이 멈춤", "job": "길과 맵 모양", "col": "#E9B935"},
+	"supply": {"name": "보급", "passive": "웨이브마다 나에게 +60골드 · 골드 주기 +20%", "ability": "보급품 투하", "ab_desc": "팀원에게 다시 뽑기 1회 + 80골드", "job": "돈을 모아 필요한 사람에게", "col": "#38A672"},
+	"mech": {"name": "정비", "passive": "남의 포탑 투자 20% 할인", "ability": "과부하 운전", "ab_desc": "포탑 하나 10초 공격 속도 x2", "job": "팀원 포탑을 키운다", "col": "#3D6FD1"},
+	"fire": {"name": "화력", "passive": "내 포탑 피해 +10% · 고르기 카드 7장", "ability": "일제 사격", "ab_desc": "5초 동안 내 포탑 반응 피해 x2", "job": "주 피해를 맡는다", "col": "#D9503C"},
+}
+const ROLE_ORDER := ["chief", "supply", "mech", "fire"]
+const BOT_ROLE := ["supply", "mech", "fire", "chief"]      # 연습 동료가 고르는 순서
+const CHIEF_MAT := 2
+const SUPPLY_GOLD := 60
+const GIVE_BONUS := 0.2
+const MECH_DISCOUNT := 0.2
+const FIRE_DMG := 0.1
+const WALL_TIME := 8.0
+const DROP_GOLD := 80
+const OVERLOAD_TIME := 10.0
+const VOLLEY_TIME := 5.0
 const INVEST_SHARE := 0.25    # 투자 한 번 = 다음 강화비의 25% (10골드 단위로 내림)
 const INVEST_AUTO := 5.0      # 주인이 없으면 게이지가 찬 뒤 5초에 자동 강화        # 가시 덫개 수리에 드는 공사 자재
 

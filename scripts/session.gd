@@ -56,10 +56,9 @@ func open_host(practice := false) -> void:
 	seat = 0
 	state = "lobby"
 	seats = [{"peer": "", "token": my_token, "name": my_name, "online": true, "col": 0, "ready": false}]
-	if practice:
-		seats.append({"peer": "", "token": "bot", "name": "연습 동료", "online": true, "col": 1, "ready": true})
+	if practice:      # 혼자 연습도 대기실에서 역할·난이도를 고르고 시작한다
+		seats.append({"peer": "", "token": "bot", "name": "연습 동료", "online": true, "col": 1, "ready": true, "role": ""})
 		seats[0]["ready"] = true
-		start_match()
 
 
 func open_client() -> void:
@@ -75,6 +74,11 @@ func start_match() -> String:
 	for st in seats:
 		if not st["ready"]:
 			return "모두 준비해야 시작할 수 있어요"
+	if solo:
+		_bot_role()
+	for st in seats:
+		if str(st.get("role", "")) == "":
+			return "역할을 골라요"
 	_begin()
 	return ""
 
@@ -93,6 +97,9 @@ func _begin() -> void:
 	for i in seats.size():
 		m.players[i]["online"] = seats[i]["online"]
 		m.players[i]["col"] = seats[i]["col"]
+		m.players[i]["role"] = str(seats[i].get("role", ""))
+	m._deal()      # 화력은 카드 7장
+	m.auto_kits()
 	state = "game"
 	_bot_wave = 0
 	_sent_version = -1
@@ -135,6 +142,14 @@ func _apply_seat(s: int, d: Dictionary) -> void:
 			seats[s]["col"] = c
 	if d.has("ready"):
 		seats[s]["ready"] = bool(d["ready"])
+	if d.has("role"):
+		var r := str(d["role"])
+		var taken := false
+		for i in seats.size():
+			if i != s and str(seats[i].get("role", "")) == r and str(seats[i]["token"]) != "bot":
+				taken = true
+		if r == "" or (GData.ROLES.has(r) and not taken):
+			seats[s]["role"] = r
 	if d.has("kit") and GMatch.kit_ok(d["kit"]):
 		var kit: Array = []
 		for t in d["kit"]:
@@ -142,6 +157,22 @@ func _apply_seat(s: int, d: Dictionary) -> void:
 		seats[s]["kit"] = kit
 	if net and not solo:
 		net.broadcast(_lobby_data())
+
+
+## 연습 동료: 남은 역할 중 보급 > 정비 > 화력 > 반장
+func _bot_role() -> void:
+	for i in seats.size():
+		if str(seats[i]["token"]) != "bot":
+			continue
+		seats[i]["role"] = ""
+		for r in GData.BOT_ROLE:
+			var taken := false
+			for k in seats.size():
+				if str(seats[k].get("role", "")) == r:
+					taken = true
+			if not taken:
+				seats[i]["role"] = r
+				break
 
 
 func _free_col() -> int:
@@ -269,7 +300,7 @@ func _push_state() -> void:
 func _lobby_data() -> Dictionary:
 	var names := []
 	for s in seats:
-		names.append({"name": s["name"], "online": s["online"], "col": s["col"], "ready": s["ready"], "kit": s.get("kit", GData.DEFAULT_KIT)})
+		names.append({"name": s["name"], "online": s["online"], "col": s["col"], "ready": s["ready"], "kit": s.get("kit", GData.DEFAULT_KIT), "role": s.get("role", "")})
 	return {"t": "lobby", "seats": names, "df": difficulty}
 
 
@@ -526,7 +557,7 @@ func _client_msg(from: String, d: Dictionary) -> void:
 				var kit: Array = []
 				for t in s.get("kit", GData.DEFAULT_KIT):
 					kit.append(str(t))
-				seats.append({"peer": "", "token": "", "name": str(s["name"]), "online": bool(s["online"]), "col": int(s["col"]), "ready": bool(s["ready"]), "kit": kit})
+				seats.append({"peer": "", "token": "", "name": str(s["name"]), "online": bool(s["online"]), "col": int(s["col"]), "ready": bool(s["ready"]), "kit": kit, "role": str(s.get("role", ""))})
 		"st":
 			if m == null:
 				m = GMatch.new()

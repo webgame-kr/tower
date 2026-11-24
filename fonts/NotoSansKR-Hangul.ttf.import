@@ -2,13 +2,13 @@
 
 importer="font_data_dynamic"
 type="FontFile"
-uid="uid://dl1tn1fdxs1m3"
-path="res://.godot/imported/IBMPlexSansKR-Regular.ttf-b98e40c4572551d690835e3c8123aefe.fontdata"
+uid="uid://j12obbtrxpku"
+path="res://.godot/imported/NotoSansKR-Hangul.ttf-072a073703f446c64a1376c42ac0b179.fontdata"
 
 [deps]
 
-source_file="res://fonts/IBMPlexSansKR-Regular.ttf"
-dest_files=["res://.godot/imported/IBMPlexSansKR-Regular.ttf-b98e40c4572551d690835e3c8123aefe.fontdata"]
+source_file="res://fonts/NotoSansKR-Hangul.ttf"
+dest_files=["res://.godot/imported/NotoSansKR-Hangul.ttf-072a073703f446c64a1376c42ac0b179.fontdata"]
 
 [params]
 

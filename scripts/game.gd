@@ -3,8 +3,8 @@ extends Control
 ## 규칙은 GMatch, 온라인은 GSession 이 맡는다.
 
 const NetScript := preload("res://scripts/net.gd")
-const BOLD := preload("res://fonts/IBMPlexSansKR-Bold.ttf")
-const REG := preload("res://fonts/IBMPlexSansKR-Regular.ttf")
+const NOTO := preload("res://fonts/NotoSansKR-Hangul.ttf")   # 한글 (가변 굵기 400~700)
+const MONO := preload("res://fonts/DMMono-Medium.ttf")         # 영문·숫자 (테크 모노)
 const TEX_TOWERS := preload("res://art/towers.png")
 const TEX_ENEMIES := preload("res://art/enemies.png")
 const TEX_ICONS := preload("res://art/icons.png")
@@ -54,6 +54,9 @@ const PING_COL := [Color("3F9BD6"), Color("D2452F"), Color("E9B935"), Color("C9A
 
 var net: Node
 var s: GSession
+## 시안의 글꼴 쌓기: 본문은 Noto Sans KR, 라벨·숫자는 'DM Mono', 'Noto Sans KR'
+var REG: Font
+var BOLD: Font
 var web := false
 var room := ""
 
@@ -141,6 +144,21 @@ var menu_items: Array = []
 var code_go: Button
 var speed_btns: Array = []
 var _none := StyleBoxEmpty.new()
+
+
+func _init() -> void:
+	REG = _noto(400)
+	var mono := FontVariation.new()
+	mono.base_font = MONO
+	mono.fallbacks = [_noto(700)]
+	BOLD = mono
+
+
+func _noto(weight: int) -> FontVariation:
+	var f := FontVariation.new()
+	f.base_font = NOTO
+	f.variation_opentype = {TextServerManager.get_primary_interface().name_to_tag("wght"): weight}
+	return f
 
 
 func _ready() -> void:

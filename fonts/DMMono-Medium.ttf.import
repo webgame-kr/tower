@@ -2,13 +2,13 @@
 
 importer="font_data_dynamic"
 type="FontFile"
-uid="uid://bisdq2dnk7j5x"
-path="res://.godot/imported/IBMPlexSansKR-Bold.ttf-2ae0690e222537068db4080f34309a49.fontdata"
+uid="uid://dxi0art8kheg7"
+path="res://.godot/imported/DMMono-Medium.ttf-031f912fcbd623d42eae7ca957fefc4e.fontdata"
 
 [deps]
 
-source_file="res://fonts/IBMPlexSansKR-Bold.ttf"
-dest_files=["res://.godot/imported/IBMPlexSansKR-Bold.ttf-2ae0690e222537068db4080f34309a49.fontdata"]
+source_file="res://fonts/DMMono-Medium.ttf"
+dest_files=["res://.godot/imported/DMMono-Medium.ttf-031f912fcbd623d42eae7ca957fefc4e.fontdata"]
 
 [params]
 

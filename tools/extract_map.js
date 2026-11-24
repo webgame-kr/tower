@@ -26,13 +26,13 @@ const inner = (s) => s.slice(s.indexOf(">") + 1, s.lastIndexOf("</svg>"));
 const attr = (k, n) => (k.slice(0, k.indexOf(">")).match(new RegExp(" " + n + '="([^"]+)"')) || [])[1] || "";
 const page = (body) => `<!doctype html><meta charset=utf-8><style>html,body{margin:0;background:transparent;width:${W}px;height:${H}px;overflow:hidden}</style><svg xmlns="http://www.w3.org/2000/svg" viewBox="${VIEW}" width="${W}" height="${H}">${body}</svg>`;
 
-function shot(html, png, n) {
+function shot(html, png, n, w = W, h = H) {
   return new Promise((done) => {
     const prof = path.join(TMP, "prof-" + n);
     fs.mkdirSync(prof, { recursive: true });
     try { fs.unlinkSync(png); } catch (e) {}
     const p = spawn(EDGE, ["--headless=new", "--disable-gpu", "--no-first-run", "--hide-scrollbars", "--force-device-scale-factor=1",
-      "--default-background-color=00000000", "--user-data-dir=" + prof, `--window-size=${W},${H}`, "--screenshot=" + png, "file:///" + html.replace(/\\/g, "/")], { stdio: "ignore" });
+      "--default-background-color=00000000", "--user-data-dir=" + prof, `--window-size=${w},${h}`, "--screenshot=" + png, "file:///" + html.replace(/\\/g, "/")], { stdio: "ignore" });
     const t0 = Date.now();
     const iv = setInterval(() => {
       if ((fs.existsSync(png) && fs.statSync(png).size > 0) || Date.now() - t0 > 40000) {
@@ -58,6 +58,15 @@ function shot(html, png, n) {
     while (!kids[second].startsWith("<g")) second++;
     const hidden = (i) => { if (!skip) return false; for (let s = 0; s < skip.length; s += 2) if (i >= skip[s] && i <= skip[s + 1]) return true; return false; };
     const over = kids.filter((k, i) => i > second && !hidden(i));
+    // 3번 입구: 1번 입구 구조물을 번호판 없이 따로 뽑아 게임에서 돌려 쓴다
+    const door = kids.findIndex((k) => k.startsWith("<rect") && attr(k, "stroke") === "#D9A21B" && attr(k, "x").startsWith("76.1"));
+    let from = door;
+    while (from > 0 && !(kids[from].startsWith("<rect") && attr(kids[from], "fill") === "#000000")) from--;
+    let to = door;
+    while (!kids[to].startsWith("<g")) to++;
+    const gateHtml = path.join(TMP, `${id}_gate3.html`);
+    fs.writeFileSync(gateHtml, `<!doctype html><meta charset=utf-8><style>html,body{margin:0;background:transparent;width:220px;height:220px;overflow:hidden}</style><svg xmlns="http://www.w3.org/2000/svg" viewBox="44 143 55 55" width="220" height="220">${kids.slice(from, to).join("")}</svg>`);
+    await shot(gateHtml, path.join(OUT, `${id}_gate3.png`), id + "gate", 220, 220);
     if (id === "sand") console.log("sand zone", attr(kids[44], "cx"), attr(kids[44], "cy"), attr(kids[44], "r"));
     for (const [suffix, body] of [["base", kids.slice(0, grid).join("")], ["over", over.join("")]]) {
       const html = path.join(TMP, `${id}_${suffix}.html`);

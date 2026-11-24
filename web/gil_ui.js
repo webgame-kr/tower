@@ -52,7 +52,7 @@
       el.style.top = (r.top + y * scale) + "px";
       el.style.width = (w * scale) + "px";
       el.style.height = (38 * scale) + "px";
-      el.style.fontSize = Math.max(12, 14 * scale) + "px";
+      el.style.fontSize = Math.max(9, 14 * scale) + "px";
       el.style.display = "block";
     },
     hide: function (id) { if (fields[id]) { fields[id].style.display = "none"; fields[id].blur(); } },

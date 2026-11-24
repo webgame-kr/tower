@@ -45,6 +45,11 @@ func token() -> String:
 	return str(_js.token()) if has_fn("token") else ""
 
 
+## 이 탭 표시 (같은 브라우저로 여러 명이 들어와도 자리가 섞이지 않게)
+func tab_id() -> String:
+	return str(_js.tab()) if has_fn("tab") else ""
+
+
 ## peer 에게서 마지막으로 받은 뒤 지난 초 (-1 = 모름)
 func quiet(peer: String) -> int:
 	return int(_js.quiet(peer)) if has_fn("quiet") else -1

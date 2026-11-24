@@ -316,8 +316,8 @@ func _place() -> void:
 	if _screen == "menu":
 		ui.show("name", "내 이름 (10자)", 10, _off.x + 460, _off.y + 352, 360, scale, true)
 	elif _screen == "lobby":
-		var x := 351.0 if s != null and s.seat <= 0 else 659.0
-		ui.show("name", "내 이름 (10자)", 10, _off.x + x, _off.y + 320, 270, scale, true)
+		var at := _crew_rect(maxi(s.seat, 0) if s != null else 0).position + Vector2(108, 40)
+		ui.show("name", "내 이름 (10자)", 10, _off.x + at.x, _off.y + at.y, 177, scale, true)
 	if _screen == "game" and chat_open:
 		ui.show("chat", "Enter 를 눌러 채팅", GSession.CHAT_MAX, _off.x + 252, _off.y + 555, 286, scale, false)
 	elif _screen == "game":
@@ -376,6 +376,7 @@ func _player_name() -> String:
 
 func _on_host() -> void:
 	s = GSession.new(net, _player_name(), net.token())
+	s.my_tab = net.tab_id()
 	_name_sent = s.my_name
 	net.host()
 	s.open_host()
@@ -384,6 +385,7 @@ func _on_host() -> void:
 
 func _on_join() -> void:
 	s = GSession.new(net, _player_name(), net.token())
+	s.my_tab = net.tab_id()
 	_name_sent = s.my_name
 	s.open_client()
 	net.join(room)
@@ -470,7 +472,7 @@ func _enter_game() -> void:
 	selected = -1
 	_fxs = []
 	_disp = {}
-	chat_open = true
+	chat_open = not (s and s.m and s.m.players.size() > 2)   # 3~4인은 3번 길 개조 공간을 가리지 않게 접어서 시작
 	_theme = GData.theme_of(s.m.wave) if s and s.m else 0
 	_theme_goal = _theme
 	_trans_t = 0.0
@@ -563,11 +565,11 @@ func _say(text: String) -> void:
 
 func _update_lobby(delta: float) -> void:
 	var mine := s.seat
-	var x := 351.0 if mine <= 0 else 659.0
+	var crew := _crew_rect(maxi(mine, 0)).position
 	for c in 4:
 		var b: Button = col_btns[c]
-		b.position = Vector2(x + c * 42, 394)
-		b.size = Vector2(36, 36)
+		b.position = crew + Vector2(108 + c * 44, 94)
+		b.size = Vector2(38, 38)
 		b.visible = mine >= 0
 		var taken := false
 		for i in s.seats.size():
@@ -575,8 +577,8 @@ func _update_lobby(delta: float) -> void:
 				taken = true
 		b.disabled = taken
 	ready_lobby.visible = mine >= 0 and mine < s.seats.size()
-	ready_lobby.position = Vector2(x, 442)
-	ready_lobby.size = Vector2(270, 44)
+	ready_lobby.position = crew + Vector2(15, 162)
+	ready_lobby.size = Vector2(270, 42)
 	if ready_lobby.visible:
 		var r: bool = s.seats[mine]["ready"]
 		ready_lobby.text = "준비 취소" if r else "준비 완료"
@@ -587,7 +589,7 @@ func _update_lobby(delta: float) -> void:
 			ready_n += 1
 	start_btn.visible = s.is_host
 	start_btn.disabled = s.seats.size() < 2 or ready_n < s.seats.size()
-	start_btn.text = "시작 · 준비 %d/2" % ready_n
+	start_btn.text = "시작 · 준비 %d/%d" % [ready_n, s.seats.size()]
 	_place()
 	_name_t -= delta
 	if web and _name_t <= 0.0 and mine >= 0:
@@ -621,7 +623,7 @@ func _take_chat() -> void:
 	for row in rows:
 		var who := int(row["seat"])
 		if who >= 0:
-			var col := _col_of_seat(who)
+			var col := int(row.get("col", _col_of_seat(who))) % 4
 			chat_box.push_color(OWNER_TEXT[col])
 			chat_box.add_text("%s %s  " % [MARK[col], row["name"]])
 			chat_box.pop()
@@ -1003,8 +1005,10 @@ func _gate_badge(center: Vector2, e: int) -> void:
 		for k in 10:
 			star.append(ic + Vector2.from_angle(-PI * 0.5 + TAU * k / 10.0) * (7.0 if k % 2 == 0 else 3.0))
 		draw_colored_polygon(star, AMBER)
-	else:
+	elif e == 1:
 		draw_arc(ic + Vector2(2, 0), 6.5, PI * 0.62, PI * 1.38, 14, AMBER, 2.2, true)
+	else:
+		draw_colored_polygon(PackedVector2Array([ic + Vector2(2, -8), ic + Vector2(-5, 1), ic + Vector2(-1, 1), ic + Vector2(-3, 8), ic + Vector2(5, -2), ic + Vector2(1, -2)]), AMBER)
 	_t(center + Vector2(9, -10), str(e + 1), 15, AMBER, true, 1)
 
 
@@ -1056,10 +1060,10 @@ func _draw_zones() -> void:
 	var zone := str(GData.THEMES[_theme]["zone"])
 	match zone:
 		"ice":
-			for r in GData.ICE_ZONES:
+			for r in GData.ice_zones(s.m.board.paths.size()):
 				_zone_cells(r, Color("BFE8F7"), Color("5FC7EA"), "빙판 · 가속", Vector2i(0, 2))
 		"lava":
-			for r in GData.LAVA_ZONES:
+			for r in GData.lava_zones(s.m.board.paths.size()):
 				_zone_cells(r, FIRE, Color("FFE08A"), "용암 · 지속 피해", Vector2i(2, 0))
 		"sand":
 			var center := _p(GData.SAND_CENTER)
@@ -1219,13 +1223,14 @@ func _draw_transition() -> void:
 
 
 func _draw_gate_cards(m: GMatch) -> void:
-	for e in 2:
+	var spots := [Vector2(8, 300), Vector2(652, 132), Vector2(492, 470)]
+	for e in m.board.paths.size():
 		var counts := {}
-		for g in GData.wave_groups(m.wave):
+		for g in m.wave_plan():
 			if int(g[0]) == e:
 				counts[g[1]] = int(counts.get(g[1], 0)) + int(g[2])
 		var width := 150.0
-		var r := Rect2(FRAME.position + Vector2(8, 300), Vector2(width, 56)) if e == 0 else Rect2(FRAME.position + Vector2(810 - width - 8, 132), Vector2(width, 56))
+		var r := Rect2(FRAME.position + spots[e], Vector2(width, 56))
 		if _card_blocks(m, r):      # 길이나 포탑을 가리면 표시하지 않는다 (같은 정보가 오른쪽 패널에 있다)
 			continue
 		draw_style_box(_box(Color(0.16, 0.12, 0.07, 0.94), AMBER, 5), r)
@@ -1530,14 +1535,9 @@ func _draw_lobby() -> void:
 	_t(Vector2(63, 236), code, 36, AMBER, true)
 	_t(Vector2(49, 380), "경기장", 14, INK, true)
 	_draw_mini(Rect2(49, 408, 218, 146), null)
-	_t(Vector2(49, 560), "초원 · 입구 2개 · 거의 대칭", 12, SUB)
-	for i in 2:
+	_t(Vector2(49, 560), "초원 · 입구 %d개 · %d/%d명" % [GData.lanes_for(s.seats.size()), s.seats.size(), GSession.MAX_SEATS], 12, SUB)
+	for i in GSession.MAX_SEATS:
 		_draw_crew(i)
-	var r := Rect2(336, 494, 608, 76)
-	_dashed_rect(r, Color("5C6268"))
-	_icon(Vector2i(3, 2), Rect2(432, 514, 34, 34), Color(1, 1, 1, 0.75))
-	_t(Vector2(482, 523), "반장 3 · 반장 4 자리", 13, SUB, true)
-	_t(Vector2(616, 524), "3단계 업데이트에서 열려요 · 3인부터 입구 3개", 12, SUB)
 	_card(Rect2(968, 140, 280, 440), WELL, Color("1A1D20"))
 	_t(Vector2(984, 156), "방 채팅 · 경기 중에도 이어져요", 12, SUB)
 	_card(Rect2(32, 604, 1216, 92))
@@ -1553,30 +1553,36 @@ func _draw_lobby() -> void:
 		_t(Vector2(1228, 640), msg, 13, AMBER, true, 2)
 
 
+func _crew_rect(i: int) -> Rect2:
+	return Rect2(336 + (i % 2) * 308, 140 + (i / 2) * 224, 300, 216)
+
+
 func _draw_crew(i: int) -> void:
-	var x := 336.0 + i * 308.0
-	_card(Rect2(x, 140, 300, 340))
-	_t(Vector2(x + 15, 160), "반장 %d" % (i + 1), 17, INK, true)
-	if i == 0:
-		_card(Rect2(x + 248, 157, 37, 22), WELL, WELL)
-		_t(Vector2(x + 266, 161), "방장", 11, AMBER, true, 1)
-	var prev := Rect2(x + 15, 194, 270, 90)
-	draw_rect(prev, GRASS)
-	draw_rect(prev, Color("4A5258"), false, 1.0)
+	var box := _crew_rect(i)
+	var at := box.position
 	var has := i < s.seats.size()
-	var col := int(s.seats[i]["col"]) if has else i
-	if has:
-		_tower_sprite("cold" if i == 0 else "cannon", 1, "", col, prev.position + Vector2(100, 10), 72.0)
-	else:
-		_t(Vector2(x + 150, 228), "친구를 기다리는 중", 13, Color(1, 1, 1, 0.82), true, 1)
-	_t(Vector2(x + 15, 298), "이름", 12, SUB)
+	if not has:
+		_dashed_rect(box, Color("5C6268"))
+		_icon(Vector2i(3, 2), Rect2(at + Vector2(132, 56), Vector2(36, 36)), Color(1, 1, 1, 0.55))
+		_t(at + Vector2(150, 104), "반장 %d 자리" % (i + 1), 14, SUB, true, 1)
+		_t(at + Vector2(150, 128), "초대 링크로 친구를 불러 주세요", 12, SUB, false, 1)
+		return
+	_card(box)
+	_t(at + Vector2(15, 12), "반장 %d" % (i + 1), 16, INK, true)
+	if i == 0:
+		_card(Rect2(at + Vector2(248, 11), Vector2(37, 22)), WELL, WELL)
+		_t(at + Vector2(266, 15), "방장", 11, AMBER, true, 1)
+	var prev := Rect2(at + Vector2(15, 40), Vector2(82, 112))
+	draw_rect(prev, GRASS)
+	draw_rect(prev, LINE, false, 1.0)
+	var col := int(s.seats[i]["col"])
+	_tower_sprite(["cold", "cannon", "gun", "cannon"][i], 1, "", col, prev.position + Vector2(13, 36), 56.0)
 	if i != s.seat:
-		_card(Rect2(x + 15, 318, 270, 42), WELL, LINE)
-		_t(Vector2(x + 27, 329), str(s.seats[i]["name"]) if has else "-", 14, INK, true)
-	_t(Vector2(x + 15, 374), "색과 기호", 12, SUB)
+		_card(Rect2(at + Vector2(108, 40), Vector2(177, 38)), WELL, LINE)
+		_t(at + Vector2(118, 49), str(s.seats[i]["name"]), 14, INK, true)
 	for c in 4:
-		var r := Rect2(x + 15 + c * 42, 394, 36, 36)
-		var picked := has and col == c
+		var r := Rect2(at + Vector2(108 + c * 44, 94), Vector2(38, 38))
+		var picked := col == c
 		var taken := false
 		for k in s.seats.size():
 			if k != i and int(s.seats[k]["col"]) == c:
@@ -1588,10 +1594,10 @@ func _draw_crew(i: int) -> void:
 		if taken:
 			draw_rect(r.grow(-1), Color(0.14, 0.16, 0.17, 0.72))
 	if i != s.seat:
-		var is_ready: bool = has and bool(s.seats[i]["ready"])
-		var box := Rect2(x + 15, 442, 270, 44)
-		_card(box, AMBER if is_ready else Color("33383D"), Color("8E6A12") if is_ready else LINE)
-		_t(box.get_center() + Vector2(0, -8), "준비 완료" if is_ready else ("준비 중…" if has else "빈자리"), 14, Color("1A1D20") if is_ready else SUB, true, 1)
+		var is_ready: bool = s.seats[i]["ready"]
+		var state := Rect2(at + Vector2(15, 162), Vector2(270, 42))
+		_card(state, AMBER if is_ready else Color("33383D"), Color("8E6A12") if is_ready else LINE)
+		_t(state.get_center() + Vector2(0, -8), "준비 완료" if is_ready else "준비 중…", 14, Color("1A1D20") if is_ready else SUB, true, 1)
 
 
 func _dashed_rect(r: Rect2, col: Color) -> void:
@@ -1606,24 +1612,37 @@ func _dashed_rect(r: Rect2, col: Color) -> void:
 func _draw_mini(r: Rect2, m) -> void:
 	var scale := minf(r.size.x / FRAME.size.x, r.size.y / FRAME.size.y)
 	var at := r.position + (r.size - FRAME.size * scale) * 0.5
-	draw_set_transform(_off + at - FRAME.position * scale, 0, Vector2(scale, scale))
+	var base := Transform2D(0.0, Vector2(scale, scale), 0.0, _off + at - FRAME.position * scale)
+	draw_set_transform_matrix(base)
 	var keep := _shake
 	_shake = 0.0
 	var theme: int = GData.theme_of(m.wave) if m != null else 0
 	_draw_ground(theme)
-	var paths: Array = m.board.paths if m != null else Board.new().paths
+	var paths: Array = m.board.paths if m != null else Board.new(GData.lanes_for(s.seats.size())).paths
 	var worst := -1
 	if m != null and not m.cleared and s.state != "lost":
-		worst = 0 if int(m.gate_dmg[0]) >= int(m.gate_dmg[1]) else 1
+		worst = _worst_gate(m)
 	for e in paths.size():
 		_draw_road(paths[e], theme, e == worst)
 	_draw_over(theme)
+	if paths.size() >= 3:
+		_draw_gate3(paths[2][0], theme, base)
 	if m != null:
 		for id in m.towers:
 			var t: Dictionary = m.towers[id]
 			_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), int(m.players[int(t["owner"])].get("col", 0)) % 4, _p(Vector2(int(t["x"]), int(t["y"]))), CELL)
 	_shake = keep
 	draw_set_transform(_off)
+
+
+## 3번 입구: 테마별 입구 구조물을 위로 향하게 돌려 놓고, 번호판을 붙인다
+func _draw_gate3(cell: Vector2i, theme: int, base: Transform2D) -> void:
+	var door := _p(Vector2(cell) + Vector2(0.5, 0.5)) + Vector2(0, 3.6)
+	draw_set_transform_matrix(base * Transform2D(-PI * 0.5, door))
+	var size_px := 88.0
+	draw_texture_rect(_tex(theme, "gate3"), Rect2(-size_px * 0.668, -size_px * 0.5, size_px, size_px), false)
+	draw_set_transform_matrix(base)
+	_gate_badge(_p(Vector2(cell) + Vector2(2.35, 0.55)), 2)
 
 
 func _draw_game() -> void:
@@ -1637,6 +1656,8 @@ func _draw_game() -> void:
 	_draw_grid(m)
 	_draw_draft(m, edit)
 	_draw_over()                       # 04~05 작업장·랜드마크·본부·입구
+	if m.board.paths.size() >= 3:
+		_draw_gate3(m.board.paths[2][0], _theme, Transform2D(0.0, _off))
 	_draw_castle_damage(m)
 	if m.phase == "prep" and m.towers.has(selected) and mode == "":
 		_draw_range_focus(m)
@@ -1742,7 +1763,9 @@ func _draw_top(m: GMatch) -> void:
 
 
 func _draw_team(m: GMatch) -> void:
-	_card(Rect2(16, 72, 200, 428 if m.phase == "prep" and m.road_owner == s.seat else 312))
+	var compact := m.players.size() > 2
+	var panel := maxf(312.0, 115.0 + m.players.size() * 52.0 + 4.0)
+	_card(Rect2(16, 72, 200, 428 if m.phase == "prep" and m.road_owner == s.seat else panel))
 	_t(Vector2(30, 86), "팀", 15, INK, true)
 	var ready_n := 0
 	for p in m.players:
@@ -1753,6 +1776,9 @@ func _draw_team(m: GMatch) -> void:
 	for i in m.players.size():
 		var p: Dictionary = m.players[i]
 		var col := int(p.get("col", i)) % 4
+		if compact:
+			y = _team_row(m, i, y)
+			continue
 		var h := 84.0 if i == m.road_owner else 68.0
 		if i == s.seat:
 			draw_rect(Rect2(26, y, 181, h), Color("2B3035"))
@@ -1774,6 +1800,25 @@ func _draw_team(m: GMatch) -> void:
 	for k in GData.EDITS_PER_THEME:
 		_icon(Vector2i(3, 2), Rect2(36 + k * 34, y + 34, 26, 26), Color.WHITE if k < m.edits_left else Color(0.5, 0.5, 0.5, 0.35))
 	_t(Vector2(112, y + 36), "%d / %d" % [m.edits_left, GData.EDITS_PER_THEME], 17, INK, true)
+
+
+## 3~4인은 한 사람을 두 줄로 줄여 보여 준다
+func _team_row(m: GMatch, i: int, y: float) -> float:
+	var p: Dictionary = m.players[i]
+	if i == s.seat:
+		draw_rect(Rect2(26, y, 181, 48), Color("2B3035"))
+	_tag(Vector2(42, y + 14), int(p.get("col", i)) % 4, 17.0)
+	_t(Vector2(57, y + 5), "%s%s" % [str(p["name"]).left(6), " (나)" if i == s.seat else ""], 12, INK, true)
+	if i == m.road_owner:
+		_icon(Vector2i(3, 2), Rect2(172, y + 6, 15, 15))
+	draw_circle(Vector2(197, y + 14), 4.0, Color("3FB27F") if p["online"] else Color("6A7076"))
+	var chip := "끊김" if not p["online"] else ("전투 중" if m.phase == "combat" else ("준비됨" if p["ready"] else ("길 담당" if i == m.road_owner else "건설 중")))
+	var yellow := chip == "준비됨" or chip == "길 담당"
+	var cw := BOLD.get_string_size(chip, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x + 12
+	draw_rect(Rect2(34, y + 27, cw, 17), AMBER if yellow else Color("3A3628"))
+	_t(Vector2(40, y + 29), chip, 10, Color("1A1D20") if yellow else INK, true)
+	_t(Vector2(198, y + 29), "골드 %d" % int(p["gold"]), 10, SUB, false, 2)
+	return y + 52.0
 
 
 func _draw_inspector(m: GMatch) -> void:
@@ -1834,19 +1879,19 @@ func _draw_wave_info(m: GMatch) -> void:
 	_t(Vector2(1066, 88), "웨이브 %d" % m.wave, 18, INK, true)
 	_t(Vector2(1250, 94), "다음 적" if m.phase == "prep" else "진행 중", 11, AMBER, true, 2)
 	var y := 124.0
-	for e in 2:
+	for e in m.board.paths.size():
 		_gate_badge(Vector2(1098, y + 13), e)
-		y += 34
+		y += 32
 		var counts := {}
-		for g in GData.wave_groups(m.wave):
+		for g in m.wave_plan():
 			if int(g[0]) == e:
 				counts[g[1]] = int(counts.get(g[1], 0)) + int(g[2])
 		for k in counts:
 			_enemy_icon(k, Rect2(1066, y - 3, 26, 26))
 			_t(Vector2(1098, y + 2), str(GData.ENEMIES[k]["name"]), 12, INK)
 			_t(Vector2(1250, y + 2), "×%d" % counts[k], 13, INK, true, 2)
-			y += 28
-		y += 12
+			y += 25
+		y += 6
 	draw_line(Vector2(1065, y), Vector2(1251, y), Color("33383D"), 1.0)
 	var tips := ["포탑을 누르면 정보와 강화가 나와요.", "길 담당은 왼쪽 패널의 길 조각으로", "적의 길을 내 포탑 쪽으로 꺾어요."]
 	for i in tips.size():
@@ -1971,7 +2016,10 @@ func _draw_result() -> void:
 		names.append(str(GData.ENEMIES[str(k)]["name"]))
 		x += 38
 	_t(Vector2(x + 2, 426), " + ".join(names) if not names.is_empty() else "없음", 12, INK)
-	_t(Vector2(63, 459), "성 피해 · 1번 입구 %d / 2번 입구 %d" % [int(m.gate_dmg[0]), int(m.gate_dmg[1])], 12, INK)
+	var by_gate := []
+	for e in m.gate_dmg.size():
+		by_gate.append("%d번 %d" % [e + 1, int(m.gate_dmg[e])])
+	_t(Vector2(63, 459), "성 피해 · " + " / ".join(by_gate), 12, INK)
 	_t(Vector2(410, 126), "마지막 경기장 · %s %d/%d" % [GData.THEMES[GData.theme_of(m.wave)]["name"], (m.wave - 1) % GData.THEME_LEN + 1, GData.THEME_LEN], 12, INK, true)
 	if not m.cleared and not lost:
 		_t(Vector2(892, 126), "빨간 칸 = 뚫린 길", 11, AMBER, true, 2)
@@ -1979,6 +2027,9 @@ func _draw_result() -> void:
 	_t(Vector2(947, 130), "각자 한 일", 18, INK, true)
 	for i in m.players.size():
 		var p: Dictionary = m.players[i]
+		if m.players.size() > 2:
+			_result_row(p, i, 168.0 + i * 79.0)
+			continue
 		var y := 168.0 + i * 152.0
 		_card(Rect2(947, y, 284, 142), Color("2B2F33"), Color("2B2F33"))
 		_tag(Vector2(970, y + 22), int(p.get("col", i)) % 4, 18.0)
@@ -1988,11 +2039,26 @@ func _draw_result() -> void:
 			var at := Vector2(959 + (k % 2) * 135, y + 40 + (k / 2) * 48)
 			_t(at, cells[k][0], 11, SUB)
 			_t(at + Vector2(0, 17), cells[k][1], 15, INK, true)
-	_t(Vector2(947, 490), "항목별로 따로 보여 주고 종합 순위는 매기지 않아요.", 11, SUB)
+	_t(Vector2(947, 500), "항목별로 따로 보여 주고 종합 순위는 매기지 않아요.", 11, SUB)
+
+
+func _result_row(p: Dictionary, i: int, y: float) -> void:
+	_card(Rect2(947, y, 284, 73), Color("2B2F33"), Color("2B2F33"))
+	_tag(Vector2(966, y + 16), int(p.get("col", i)) % 4, 15.0)
+	_t(Vector2(981, y + 7), str(p["name"]), 13, INK, true)
+	var cells := [["피해량", "%d" % int(p["dmg"])], ["처치", "%d" % int(p["kills"])], ["감속", "%.0f" % float(p["slow"])], ["지원", "%d회" % int(p["support"])]]
+	var xs := [957.0, 1046.0, 1112.0, 1176.0]
+	for k in 4:
+		_t(Vector2(xs[k], y + 31), cells[k][0], 10, SUB)
+		_t(Vector2(xs[k], y + 46), cells[k][1], 14, INK, true)
 
 
 func _worst_gate(m: GMatch) -> int:
-	return 0 if int(m.gate_dmg[0]) >= int(m.gate_dmg[1]) else 1
+	var best := 0
+	for e in m.gate_dmg.size():
+		if int(m.gate_dmg[e]) > int(m.gate_dmg[best]):
+			best = e
+	return best
 
 
 func _clock(sec: float) -> String:

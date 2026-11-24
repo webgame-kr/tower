@@ -5,8 +5,8 @@ extends RefCounted
 var paths: Array = []   # 입구별 Array[Vector2i]
 
 
-func _init() -> void:
-	for raw in GData.BASE_PATHS:
+func _init(lanes := 2) -> void:
+	for raw in GData.BASE_PATHS.slice(0, lanes):
 		var p: Array = []
 		for c in raw:
 			p.append(Vector2i(int(c[0]), int(c[1])))

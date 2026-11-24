@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")/.."
 . ./.godotbin
 "$G" --headless --path . --import >/dev/null 2>&1 || true
-for t in run_tests net_tests; do
+for t in run_tests net_tests four_tests; do
   out=$("$G" --headless --path . -s "res://tests/$t.gd" 2>&1) || { echo "$out"; exit 1; }
   echo "$out" | grep -E 'passed'
   if echo "$out" | grep -q "SCRIPT ERROR"; then echo "$out"; exit 1; fi

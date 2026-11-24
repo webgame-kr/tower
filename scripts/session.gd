@@ -3,7 +3,7 @@ extends RefCounted
 ## 온라인 한 판. 호스트가 판정하고 손님은 요청과 표시만 한다.
 ## transport 는 send_to / broadcast / poll 만 있으면 된다 (실제 연결 또는 테스트용 가짜 연결).
 
-const MAX_SEATS := 2
+const MAX_SEATS := 4
 const CHAT_MAX := 200
 const CHAT_KEEP := 100
 const RESEND := 2.0
@@ -14,6 +14,7 @@ var solo := false
 var seat := -1
 var my_name := ""
 var my_token := ""
+var my_tab := ""          # 같은 브라우저의 다른 탭을 다른 사람으로 구분한다
 var state := "idle"      # idle | lobby | game | lost
 var m: GMatch = null
 var seats: Array = []    # {peer, token, name, online}
@@ -262,6 +263,8 @@ func _host_msg(from: String, d: Dictionary) -> void:
 					_system("%s 님의 연결이 끊겼어요. 포탑은 계속 싸웁니다." % seats[s]["name"])
 				else:
 					seats.remove_at(s)
+					for i in range(1, seats.size()):   # 자리가 당겨지면 각자 새 번호를 받는다
+						net.send_to(seats[i]["peer"], {"t": "seatno", "seat": i})
 				net.broadcast(_lobby_data())
 
 
@@ -270,17 +273,24 @@ func _hello(from: String, d: Dictionary) -> void:
 	var name := str(d.get("name", "친구")).strip_edges().left(10)
 	if name == "":
 		name = "친구"
+	var tab := str(d.get("tab", ""))
 	var at := -1
 	for i in range(1, seats.size()):   # 방장 자리(0)는 같은 브라우저의 다른 탭이라도 가져갈 수 없다
-		if seats[i]["token"] == token:
+		if seats[i]["token"] != token:
+			continue
+		if str(seats[i].get("tab", "")) == tab:      # 새로고침·재접속
+			at = i
+			break
+		if not seats[i]["online"] and at < 0:        # 탭을 닫았다가 다시 열었을 때
 			at = i
 	if at < 0:
 		if m != null or seats.size() >= MAX_SEATS:
 			net.send_to(from, {"t": "full", "why": "이미 시작했거나 자리가 없어요"})
 			return
-		seats.append({"peer": from, "token": token, "name": name, "online": true, "col": _free_col(), "ready": false})
+		seats.append({"peer": from, "token": token, "tab": tab, "name": name, "online": true, "col": _free_col(), "ready": false})
 		at = seats.size() - 1
 	else:
+		seats[at]["tab"] = tab
 		seats[at]["peer"] = from
 		seats[at]["online"] = true
 		if m:
@@ -324,7 +334,7 @@ func _chat(s: int, raw: String) -> String:
 		return "너무 빨라요. %d초 뒤에 보내 주세요" % ceili(4.0 - (_clock - float(times[0])))
 	times.append(_clock)
 	_chat_times[s] = times
-	_add_chat({"seat": s, "name": seats[s]["name"], "text": text})
+	_add_chat({"seat": s, "col": seats[s]["col"], "name": seats[s]["name"], "text": text})
 	return ""
 
 
@@ -343,7 +353,7 @@ func _ping(s: int, c: Dictionary) -> String:
 	_add_ping(row)
 	if net and not solo:
 		net.broadcast({"t": "ping", "p": row})
-	_add_chat({"seat": s, "name": seats[s]["name"], "text": GData.PING_KINDS[kind], "x": x, "y": y})
+	_add_chat({"seat": s, "col": seats[s]["col"], "name": seats[s]["name"], "text": GData.PING_KINDS[kind], "x": x, "y": y})
 	return ""
 
 
@@ -416,11 +426,13 @@ func _client_msg(from: String, d: Dictionary) -> void:
 	match str(d.get("t", "")):
 		"_open":
 			_host_peer = from
-			net.send_to(from, {"t": "hello", "name": my_name, "token": my_token})
+			net.send_to(from, {"t": "hello", "name": my_name, "token": my_token, "tab": my_tab})
 		"_left":
 			if from == _host_peer:
 				state = "lost"
 				_host_peer = ""
+		"seatno":
+			seat = int(d["seat"])
 		"tolobby":
 			m = null
 			state = "lobby"

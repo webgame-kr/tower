@@ -26,10 +26,21 @@ var _next_id := 1
 
 
 func _init(names: Array = []) -> void:
+	if not names.is_empty():
+		var lanes := GData.lanes_for(names.size())
+		board = Board.new(lanes)
+		gate_dmg = []
+		gate_dmg.resize(lanes)
+		gate_dmg.fill(0)
 	for i in names.size():
 		var n = names[i]
 		players.append({"name": str(n), "col": i, "gold": GData.START_GOLD, "ready": false, "online": true, "used": false,
 			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0})
+
+
+## 지금 웨이브의 입구별 적 구성
+func wave_plan() -> Array:
+	return GData.wave_groups(wave, players.size())
 
 
 func tower_cells() -> Dictionary:
@@ -215,7 +226,7 @@ func _start_wave() -> void:
 	draft = {}
 	_wave_t = 0.0
 	_queue = []
-	for g in GData.wave_groups(wave):
+	for g in wave_plan():
 		for n in int(g[2]):
 			_queue.append({"t": float(g[4]) + n * float(g[3]), "e": int(g[0]), "type": str(g[1])})
 	_queue.sort_custom(func(a, b): return a["t"] < b["t"])
@@ -233,7 +244,7 @@ func step(dt := GData.TICK) -> void:
 	while not _queue.is_empty() and _queue[0]["t"] <= _wave_t and enemies.size() < GData.MAX_ALIVE:
 		var q: Dictionary = _queue.pop_front()
 		var d: Dictionary = GData.ENEMIES[q["type"]]
-		var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave)
+		var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size())
 		enemies.append({"id": _next_id, "type": q["type"], "e": q["e"], "dist": 0.0, "hp": max_hp, "max": max_hp,
 			"slow": 0.0, "slow_t": 0.0})
 		_next_id += 1
@@ -255,9 +266,9 @@ func _move_enemies(dt: float) -> void:
 		var d: Dictionary = GData.ENEMIES[en["type"]]
 		var zone := _zone()
 		var cell := Vector2i(_pos(en))
-		var boost := GData.ICE_SPEED if zone == "ice" and _in_zones(cell, GData.ICE_ZONES) else 1.0
+		var boost := GData.ICE_SPEED if zone == "ice" and _in_zones(cell, GData.ice_zones(board.paths.size())) else 1.0
 		en["dist"] += float(d["speed"]) * boost * (1.0 - float(en["slow"])) * dt
-		if zone == "lava" and _in_zones(cell, GData.LAVA_ZONES):
+		if zone == "lava" and _in_zones(cell, GData.lava_zones(board.paths.size())):
 			en["hp"] = float(en["hp"]) - float(en["max"]) * GData.LAVA_RATE * dt
 			if float(en["hp"]) <= 0.0:
 				enemies.remove_at(idx)
@@ -475,7 +486,9 @@ func load_data(d: Dictionary) -> void:
 	time = float(d["tm"])
 	version = int(d["v"])
 	board.load_data(d["pa"])
-	gate_dmg = [int(d["gd"][0]), int(d["gd"][1])]
+	gate_dmg = []
+	for v in d["gd"]:
+		gate_dmg.append(int(v))
 	leaks = d["lk"]
 
 

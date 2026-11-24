@@ -20,11 +20,13 @@ const ABILITY_SLOW := 0.4
 const MAX_ALIVE := 60
 const TICK := 0.05
 const HP_GROWTH := 0.22
+static var player_scale := {3: [1.0, 1.0], 4: [1.36, 1.24]}   # 인원별 [적 수, 적 체력] 배율
 static var hp_mul := 2.0     # 적 체력 배율 (밸런스 조정용)
 
 const BASE_PATHS := [
 	[[0, 8], [1, 8], [2, 8], [3, 8], [4, 8], [4, 7], [4, 6], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [8, 6], [8, 7], [8, 8], [9, 8], [10, 8], [11, 8]],
 	[[26, 8], [25, 8], [24, 8], [23, 8], [22, 8], [21, 8], [21, 9], [21, 10], [21, 11], [21, 12], [20, 12], [19, 12], [18, 12], [17, 12], [17, 11], [17, 10], [17, 9], [17, 8], [16, 8], [15, 8]],
+	[[13, 17], [13, 16], [13, 15], [12, 15], [11, 15], [10, 15], [10, 14], [10, 13], [10, 12], [11, 12], [12, 12], [13, 12], [13, 11], [13, 10]],
 ]
 
 const PIECES := {
@@ -82,6 +84,8 @@ const THEMES := [
 ## 실제 효과 구역. 그림과 별개로 모든 플레이어가 같은 값을 쓴다.
 const ICE_ZONES := [Rect2i(4, 5, 5, 1), Rect2i(21, 9, 1, 4)]
 const LAVA_ZONES := [Rect2i(8, 5, 1, 4), Rect2i(17, 9, 1, 4)]
+const ICE_ZONE_3 := Rect2i(10, 12, 4, 1)    # 3번 길 (3~4인)
+const LAVA_ZONE_3 := Rect2i(10, 13, 1, 3)
 const SAND_CENTER := Vector2(19.5, 10.5)
 const SAND_RADIUS := 3.2
 const ICE_SPEED := 1.3
@@ -103,8 +107,37 @@ static func theme_of(wave: int) -> int:
 	return clampi((wave - 1) / THEME_LEN, 0, THEMES.size() - 1)
 
 
-## 웨이브 구성. 시안 구간 뒤로는 같은 패턴을 더 많이 내보낸다.
-static func wave_groups(wave: int) -> Array:
+## 2인은 입구 2개, 3~4인은 입구 3개
+static func lanes_for(players: int) -> int:
+	return 3 if players >= 3 else 2
+
+
+static func ice_zones(lanes: int) -> Array:
+	return ICE_ZONES + [ICE_ZONE_3] if lanes >= 3 else ICE_ZONES
+
+
+static func lava_zones(lanes: int) -> Array:
+	return LAVA_ZONES + [LAVA_ZONE_3] if lanes >= 3 else LAVA_ZONES
+
+
+## 인원에 맞춘 웨이브. 개인 골드는 그대로 두고 적 물량과 체력을 올린다.
+static func wave_groups(wave: int, players := 2) -> Array:
+	var base := _base_groups(wave)
+	if players <= 2:
+		return base
+	var more: float = player_scale[players][0]
+	var out := []
+	for g in base:
+		var n: int = int(g[2]) if g[1] == "boss" else ceili(int(g[2]) * more)
+		out.append([g[0], g[1], n, g[3], g[4]])
+	var from := wave % 2                 # 3번 입구는 두 입구의 패턴을 번갈아 받는다
+	for g in base:
+		if int(g[0]) == from and g[1] != "boss":
+			out.append([2, g[1], ceili(int(g[2]) * more * 0.8), g[3], float(g[4]) + 1.0])
+	return out
+
+
+static func _base_groups(wave: int) -> Array:
 	if wave <= WAVES.size():
 		return WAVES[wave - 1]
 	var out := []
@@ -114,8 +147,8 @@ static func wave_groups(wave: int) -> Array:
 	return out
 
 
-static func wave_hp(wave: int) -> float:
-	return 1.0 + maxi(wave - WAVES.size(), 0) * HP_GROWTH
+static func wave_hp(wave: int, players := 2) -> float:
+	return (1.0 + maxi(wave - WAVES.size(), 0) * HP_GROWTH) * (float(player_scale[players][1]) if player_scale.has(players) else 1.0)
 
 
 ## 지금 단계의 포탑 능력치

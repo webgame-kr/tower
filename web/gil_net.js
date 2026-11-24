@@ -19,7 +19,7 @@
   var TOPIC = "gilmakgi-v1/";
   function rid() { return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6); }
   var net = {
-    ver: 1,
+    ver: 2,
     relays: [],       // 연결된 중계 클라이언트
     trail: [],        // 진단 코드: 연결하며 실패한 단계들 (예: E30-E50)
 
@@ -88,6 +88,18 @@
       } catch (e) {
         if (!net._tok) net._tok = Math.random().toString(36).slice(2);
         return net._tok;
+      }
+    },
+
+    // 이 탭 표시: 새로고침해도 유지되고 다른 탭과는 다르다
+    tab: function () {
+      try {
+        var t = sessionStorage.getItem("gil_tab");
+        if (!t) { t = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem("gil_tab", t); }
+        return t;
+      } catch (e) {
+        if (!net._tabId) net._tabId = Math.random().toString(36).slice(2);
+        return net._tabId;
       }
     },
 

@@ -191,17 +191,15 @@ func _init() -> void:
 
 ## 예전 크기(px) → 도트 글꼴과 화면 크기. 원본의 정확히 2배만 쓴다.
 func _pf(px: int, bold := true) -> Array:
-	if px <= 11:
-		return [GAL7, 16]
 	if px <= 13:
-		return [GAL9, 20]
+		return [GAL7, 16]
 	if px <= 17:
-		return [GAL11B if bold else GAL11, 24]
+		return [GAL9, 20]
 	if px < 36:
-		return [GAL14, 30]
+		return [GAL11B if bold else GAL11, 24]
 	if px < 50:
-		return [GAL11B, 44]
-	return [GAL14, 60]
+		return [GAL14, 30]
+	return [GAL11B, 44]
 
 
 func _sz(text: String, px: int, bold := true) -> Vector2:
@@ -266,8 +264,8 @@ func _load_cfg() -> void:
 func _save_cfg() -> void:
 	fx_low = bool(cfg["fx_low"])
 	_chat_key = ""
-	chat_box.add_theme_font_override("normal_font", GAL9 if float(cfg["font"]) <= 100.0 else GAL14)
-	chat_box.add_theme_font_size_override("normal_font_size", 20 if float(cfg["font"]) <= 100.0 else 30)
+	chat_box.add_theme_font_override("normal_font", GAL7 if float(cfg["font"]) <= 100.0 else GAL9)
+	chat_box.add_theme_font_size_override("normal_font_size", 16 if float(cfg["font"]) <= 100.0 else 20)
 	if web:
 		JavaScriptBridge.get_interface("GilUI").save_key("cfg", JSON.stringify(cfg))
 
@@ -414,8 +412,8 @@ func _build_chat() -> void:
 	chat_box = RichTextLabel.new()
 	chat_box.bbcode_enabled = false      # 사용자 입력이 서식으로 해석되지 않게
 	chat_box.scroll_following = true
-	chat_box.add_theme_font_override("normal_font", GAL9)
-	chat_box.add_theme_font_size_override("normal_font_size", 20)
+	chat_box.add_theme_font_override("normal_font", GAL7)
+	chat_box.add_theme_font_size_override("normal_font_size", 16)
 	chat_box.add_theme_color_override("default_color", INK)
 	chat_box.add_theme_constant_override("line_separation", 3)
 	chat_box.meta_clicked.connect(_on_chat_link)
@@ -2829,7 +2827,7 @@ func _draw_menu() -> void:
 	_prect(Rect2(-_off.x, -_off.y, 380 + _off.x, v.y), Color("1A1917"))
 	_dim_screen(Rect2(380, -_off.y, 40, v.y))
 	_t(Vector2(32, 60), "CO-OP ENDLESS DEFENSE", 10, AMBER, true)
-	_t(Vector2(30, 80), "길 좀 막아봐", 40, INK, true)
+	_t(Vector2(30, 80), "길 좀 막아봐", 52, INK, true)
 	_hazard(Rect2(32, 152, 300, 8))
 	_t(Vector2(32, 166), "친구와 길을 바꾸고 포탑을 세워", 12, INK, true)
 	_t(Vector2(32, 190), "본부를 지켜요 · 2~4인 협동", 12, INK, true)

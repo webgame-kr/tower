@@ -57,6 +57,8 @@ func _run() -> void:
 	g.s = p
 	g._enter_game()
 	g._tut = 0
+	g._overview_t = 0.0
+	g._cam = Vector2(10, 7)
 	var m: GMatch = p.m
 	m.apply(0, {"op": "build", "type": "cannon", "x": 6, "y": 3})
 	GBot.play_prep(m, 1, true, true)
@@ -65,7 +67,7 @@ func _run() -> void:
 	print("prep 한글 글줄: ", g._hangul_drawn)
 	g._tut = -1
 	g.mode = "build:cannon"
-	g.hover = Vector2(9.5, 7.5)
+	g.hover = Vector2(9.5, 6.5)
 	await _save("u_build")
 	g.mode = ""
 	var id: int = m.tower_cells()[Vector2i(6, 3)]
@@ -83,6 +85,9 @@ func _run() -> void:
 	for _i in 520:
 		m.step()
 		m.hp = maxi(m.hp, 40)
+	g._overview_t = 0.0
+	g._last_phase = m.phase
+	g._cam = Vector2(18, 10)
 	await _save("u_combat")
 	g._toggle_pause()
 	await _save("u_pause")
@@ -116,7 +121,12 @@ func _run() -> void:
 		m4.apply(k, {"op": "ready", "v": true})
 	for _i in 260:
 		m4.step()
+	g._overview_t = 0.0
+	g._last_phase = m4.phase
 	await _save("u_combat4")
+	g._zoom = 1
+	await _save("u_combat4_x1")
+	g._zoom = 2
 	while m4.phase != "over":
 		if m4.phase == "reward":
 			for k in 4:

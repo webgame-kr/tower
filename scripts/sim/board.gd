@@ -3,7 +3,8 @@ extends RefCounted
 ## 격자와 적 경로. 길 다시 그리기와 설치 유효성 검사를 맡는다.
 
 var paths: Array = []   # 입구별 Array[Vector2i]
-var opened := false     # 유령 숲의 막힌 땅이 열렸는지
+var opened := false     # 새 입구가 하나라도 열렸는지
+var extra := 0          # 열린 새 입구 수 (테마마다 하나)
 
 
 func _init(lanes := 2) -> void:
@@ -43,8 +44,10 @@ func ground_err(c: Vector2i, theme: int, for_road: bool) -> String:
 		return "랜드마크 구역이에요"
 	if GData.ROCKS.has(c):
 		return "바위가 있어요"
-	if not opened and GData.BLOCKED.has_point(c):
-		return "막힌 땅이에요 (유령 숲에서 열려요)"
+	if GData.is_river(c):
+		if GData.is_bridge(c):
+			return "" if for_road else "다리 위에는 길만 낼 수 있어요"
+		return "강이에요"
 	if GData.is_pond(c):
 		var st := GData.pond_state(theme)
 		if st == "dry" or (st == "ice" and for_road):

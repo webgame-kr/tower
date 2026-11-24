@@ -10,7 +10,12 @@ static var H := 13
 static var CASTLE := Rect2i(9, 5, 3, 3)
 static var LANDMARK := Rect2i(9, 1, 3, 3)    # 고정 비건설 구역
 static var BASE_PATHS: Array = []            # 처음부터 열린 길
-static var EXTRA_PATH: Array = []            # 유령 숲에서 열리는 길
+static var EXTRA_PATH: Array = []            # 첫 번째로 열리는 길 (예전 이름)
+static var EXTRA_PATHS: Array = []           # 테마가 바뀔 때마다 하나씩 열리는 길
+static var RIVERS: Array = []                # Rect2i, 강: 길·포탑 불가 (다리만 길)
+static var BRIDGES: Array = []               # Rect2i, 다리: 길만 낼 수 있다
+static var HIGH: Array = []                  # Rect2i, 높은 땅: 사거리 +1칸
+static var ART_ORIGIN := Vector2.ZERO        # 지도 그림에서 격자 시작점 (원본 px)
 static var ROCKS: Array = []                 # Vector2i, 길·포탑 모두 불가
 static var PONDS: Array = []                 # Rect2i, 테마마다 상태가 바뀜
 static var BLOCKED := Rect2i()               # 막힌 땅 (유령 숲에서 열리는 길 자리)
@@ -43,7 +48,7 @@ const HP_GROWTH := 0.22
 const MAT_START := 6
 const MAT_WAVE := 3
 const MAT_MAX := 12
-const PATH_BASE := 40         # 입구별 길이 상한 (초원), 테마마다 +8
+const PATH_BASE := 64         # 입구별 길이 상한 (초원), 테마마다 +8
 const PATH_STEP := 8
 const KIT_SIZE := 5           # 공구함에 담는 포탑 수
 
@@ -61,57 +66,32 @@ static func _cells(raw: Array) -> Array:
 	return out
 
 
-## 인원에 맞는 맵을 고른다. 판정·그리기 모두 이 값을 쓴다.
+## 인원에 맞는 맵을 고른다. 판정·그리기 모두 이 값을 쓴다 (배치는 tools/make_maps.py → MapData).
 static func use_layout(players: int) -> void:
-	if players >= 3:
-		LAYOUT = "v4"
-		W = 25
-		H = 15
-		CASTLE = Rect2i(11, 6, 3, 3)
-		LANDMARK = Rect2i(11, 0, 3, 3)
-		CELL_PX = 38.0
-		ORIGIN = Vector2(164, 64)
-		var p1 := _cells([[0, 1], [1, 1], [2, 1], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [7, 4], [7, 3], [7, 2], [7, 1], [8, 1], [9, 1], [10, 1], [10, 2], [10, 3], [10, 4], [11, 4], [11, 5]])
-		var quad := [[], [], [], []]
-		for c in p1:
-			quad[0].append(c)
-			quad[1].append(Vector2i(24 - c.x, c.y))
-			quad[2].append(Vector2i(c.x, 14 - c.y))
-			quad[3].append(Vector2i(24 - c.x, 14 - c.y))
-		BASE_PATHS = [quad[0], quad[1], quad[2]] if players == 3 else quad
-		EXTRA_PATH = quad[3] if players == 3 else _cells([[12, 14], [12, 13], [11, 13], [11, 12], [11, 11], [12, 11], [12, 10], [12, 9]])
-		ROCKS = _cells([[5, 7], [19, 7], [8, 0], [9, 0], [15, 0], [16, 0], [8, 14], [9, 14], [15, 14], [16, 14]])
-		PONDS = [Rect2i(1, 6, 3, 3), Rect2i(21, 6, 3, 3)]
-		BLOCKED = Rect2i(11, 11, 3, 4)
-		POCKETS = [Rect2i(4, 1, 3, 4), Rect2i(18, 1, 3, 4), Rect2i(4, 10, 3, 4), Rect2i(18, 10, 3, 4)]
-		WORKS = [Rect2i(0, 2, 3, 4), Rect2i(22, 2, 3, 4), Rect2i(0, 9, 3, 4), Rect2i(22, 9, 3, 4)]
-		LINES = [Rect2i(10, 6, 1, 3), Rect2i(14, 6, 1, 3)]
-		OLD_ROADS = [Rect2i(6, 7, 4, 1), Rect2i(15, 7, 4, 1)]
-		CRACKS = _cells([[7, 2], [7, 3], [17, 2], [17, 3], [7, 11], [7, 12], [17, 11], [17, 12]])
-		SAND_SPOTS = [Vector2(5.5, 3.0), Vector2(19.5, 3.0), Vector2(5.5, 12.0), Vector2(19.5, 12.0), Vector2(8.5, 7.5), Vector2(16.5, 7.5)]
-	else:      # 2인 합류 맵 (비주얼 v3): 본부는 오른쪽, 두 길이 본부 앞에서 합류
-		LAYOUT = "v2"
-		W = 21
-		H = 13
-		CASTLE = Rect2i(18, 5, 3, 3)
-		LANDMARK = Rect2i(6, 5, 3, 3)
-		CELL_PX = 38.0
-		ORIGIN = Vector2(220, 112)
-		var a := _cells([[0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [4, 2], [4, 3], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [9, 4], [9, 3], [9, 2], [9, 1], [10, 1], [11, 1], [12, 1], [13, 1], [14, 1], [14, 2], [14, 3], [14, 4], [14, 5], [15, 5], [16, 5], [16, 6], [17, 6]])
-		var b: Array = []
-		for c in a:
-			b.append(Vector2i(c.x, 12 - c.y) if c.y != 6 else c)
-		BASE_PATHS = [a, b]
-		EXTRA_PATH = _cells([[19, 0], [18, 0], [17, 0], [17, 1], [17, 2], [17, 3], [17, 4], [17, 5]])
-		ROCKS = _cells([[2, 3], [2, 7], [12, 3], [13, 8], [6, 12], [7, 12], [1, 6], [11, 10], [19, 10], [8, 0]])      # 장식 자리
-		PONDS = []
-		BLOCKED = Rect2i()
-		POCKETS = [Rect2i(5, 1, 4, 3), Rect2i(5, 9, 4, 3), Rect2i(10, 2, 4, 2), Rect2i(10, 9, 4, 2)]
-		WORKS = []
-		LINES = [Rect2i(15, 6, 1, 1)]
-		OLD_ROADS = [Rect2i(10, 6, 4, 1)]
-		CRACKS = _cells([[4, 2], [4, 3], [4, 10], [4, 9]])
-		SAND_SPOTS = [Vector2(6.5, 2.5), Vector2(11.5, 2.5), Vector2(6.5, 10.5), Vector2(11.5, 10.5), Vector2(16.0, 9.5), Vector2(2.5, 6.5)]
+	LAYOUT = "v2" if players <= 2 else ("v3" if players == 3 else "v4")
+	var L: Dictionary = MapData.get_layout(LAYOUT)
+	W = int(L["W"])
+	H = int(L["H"])
+	CASTLE = L["castle"]
+	LANDMARK = L["landmark"]
+	BASE_PATHS = L["base"]
+	EXTRA_PATHS = L["extra"]
+	EXTRA_PATH = EXTRA_PATHS[0] if not EXTRA_PATHS.is_empty() else []
+	ROCKS = L["rocks"]
+	PONDS = L["ponds"]
+	RIVERS = L["rivers"]
+	BRIDGES = L["bridges"]
+	HIGH = L["high"]
+	BLOCKED = Rect2i()
+	OLD_ROADS = L["old_roads"]
+	CRACKS = L["cracks"]
+	SAND_SPOTS = L["sand"]
+	POCKETS = []
+	WORKS = []
+	LINES = []
+	CELL_PX = 38.0
+	ORIGIN = Vector2(0, 0)
+	ART_ORIGIN = Vector2(MapData.ART_MARGIN) * 19.0
 
 
 ## 처음 열린 입구 수
@@ -138,6 +118,22 @@ static func in_rects(c: Vector2i, rects: Array) -> bool:
 		if (r as Rect2i).has_point(c):
 			return true
 	return false
+
+
+const SPEED_MUL := 1.3       # 큰 맵: 길이 길어진 만큼 적이 빠르다
+const HIGH_RANGE := 1.0       # 높은 땅 사거리 보너스 (칸)
+
+
+static func is_river(c: Vector2i) -> bool:
+	return in_rects(c, RIVERS)
+
+
+static func is_bridge(c: Vector2i) -> bool:
+	return in_rects(c, BRIDGES)
+
+
+static func is_high(c: Vector2i) -> bool:
+	return in_rects(c, HIGH)
 
 
 static func is_pond(c: Vector2i) -> bool:

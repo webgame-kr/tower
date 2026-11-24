@@ -158,6 +158,14 @@ const FONT_STEPS := [90, 100, 120, 150]
 var reject_btn: Button
 var quick_btn: Button
 var _quick_open := false
+# ── 카메라 (각자의 것, 네트워크로 보내지 않음) ──
+var _zoom := 2                 # 1 = 원본 x1 (맵 전체), 2 = x2 (기본)
+var _cam := Vector2(10, 6)     # 화면 가운데에 오는 칸 좌표
+var _overview_t := 0.0         # 준비 시작 때 x1 로 잠깐 보여 주기
+var _last_phase := ""
+var _pan := {}                 # 끌어서 이동 {from, cam, button, moved}
+const VIEW_C := Vector2(620, 364)      # 지도 화면의 가운데 (왼쪽·오른쪽 열 사이)
+const CAM_SPEED := 12.0
 var _branch_pick := false      # MK-3 갈래 카드를 펼쳤는지
 var _drag := {}                # 포탑 끌어 옮기기 {id, from}
 var _chat_seen := 0            # 접힌 채팅: 마지막으로 본 메시지 수
@@ -490,7 +498,7 @@ func _build_hud() -> void:
 	accept_btn = _btn(hud, Rect2(), "", _on_accept, "pri", T.LABEL)
 	reject_btn = _btn(hud, Rect2(), "", _on_reject, "sec", T.LABEL)
 	quick_btn = _btn(hud, Rect2(), "", _on_quick, "clear")
-	quick_btn.tooltip_text = "빠른 요청 (T) · F1~F4"
+	quick_btn.tooltip_text = "빠른 요청 (T) · 숫자키"
 	for i in 5:
 		var b := _btn(hud, Rect2(822 + i * 38, 655, 32, 32), "", _on_ping_kind.bind(PING_ORDER[i]), "clear")
 		b.tooltip_text = GData.PING_KINDS[PING_ORDER[i]]
@@ -986,14 +994,20 @@ func _enter_game() -> void:
 	_theme_goal = _theme
 	_trans_t = 0.0
 	_notice_t = 3.5 if _theme > 0 else 0.0
+	_zoom = 2
+	_cam = Vector2(GData.CASTLE.get_center()) - Vector2(4, 0)
+	_clamp_cam()
+	_overview_t = 1.2
+	_last_phase = ""
 	_show("game")
 
 
 # ── 매 프레임 ──
 
 func _process(delta: float) -> void:
-	MAP = GData.ORIGIN
-	CELL = GData.CELL_PX
+	if _screen == "game" and s != null and s.m != null and not _paused:
+		_update_camera(delta)
+	_apply_camera()
 	_tick += delta
 	_toast_t -= delta
 	_shake = maxf(_shake - delta * 3.0, 0.0)
@@ -1096,7 +1110,7 @@ func _update_theme(delta: float) -> void:
 
 
 func _tex(theme: int, part: String) -> Texture2D:
-	var key := "%s%d%s" % [GData.LAYOUT, theme, part]
+	var key := "%d|%s|%s" % [theme, GData.LAYOUT, part]
 	if not _theme_tex.has(key):
 		_theme_tex[key] = load("res://art/map/%s_%s_%s.png" % [GData.LAYOUT, GData.THEMES[theme]["id"], part])
 	return _theme_tex[key]
@@ -1281,9 +1295,87 @@ func _take_fx() -> void:
 		_fxs = _fxs.slice(_fxs.size() - 140)
 
 
+## 카메라: WASD·방향키, 화면 가장자리, 준비 시작 때 x1 잠깐
+func _update_camera(delta: float) -> void:
+	var m := s.m
+	if m.phase != _last_phase:
+		if m.phase == "prep" and _last_phase != "":
+			_overview_t = 1.0
+		_last_phase = m.phase
+	if _overview_t > 0.0:
+		_overview_t -= delta
+	if _typing() or _chat_typing:
+		return
+	var d := Vector2.ZERO
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		d.x -= 1
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		d.x += 1
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		d.y -= 1
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		d.y += 1
+	if bool(cfg.get("edge", true)) and _pan.is_empty() and DisplayServer.window_is_focused():
+		var mp := get_viewport().get_mouse_position()
+		var v := get_viewport_rect().size
+		if mp.x >= 0 and mp.y >= 0 and mp.x < v.x and mp.y < v.y:
+			if mp.x < 8:
+				d.x -= 1
+			elif mp.x > v.x - 8:
+				d.x += 1
+			if mp.y < 8:
+				d.y -= 1
+			elif mp.y > v.y - 8:
+				d.y += 1
+	if d != Vector2.ZERO:
+		var sp := CAM_SPEED * (2.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0) * (2.0 if _zoom == 1 else 1.0)
+		_cam += d.normalized() * sp * delta
+		_clamp_cam()
+
+
+func _view_zoom() -> int:
+	return 1 if _overview_t > 0.0 else _zoom
+
+
+func _clamp_cam() -> void:
+	_cam.x = clampf(_cam.x, 1.0, float(GData.W) - 1.0)
+	_cam.y = clampf(_cam.y, 1.0, float(GData.H) - 1.0)
+
+
+## MAP·CELL 을 카메라에 맞춘다. 칸 = 원본 19px x 배율, 위치는 원본 1픽셀 단위로 맞춘다
+func _apply_camera() -> void:
+	if _screen != "game" or s == null or s.m == null:
+		return
+	var z := _view_zoom()
+	CELL = TILE * z
+	var cam := _cam if z == 2 else Vector2(GData.W, GData.H) * 0.5
+	var at := VIEW_C - cam * CELL
+	MAP = (at / z).floor() * z
+
+
+func _cam_to(g: Vector2) -> void:
+	_cam = g
+	_overview_t = 0.0
+	_clamp_cam()
+
+
+## 휠·Z·X: 커서 자리를 그대로 두고 x1 ↔ x2
+func _set_zoom(z: int, at_screen := Vector2(-1, -1)) -> void:
+	if z == _zoom:
+		return
+	_overview_t = 0.0
+	var p := at_screen if at_screen.x >= 0 else VIEW_C
+	var g := (p - MAP) / CELL
+	_zoom = z
+	if z == 2:
+		_cam = g + (VIEW_C - p) / (TILE * 2.0)
+	_clamp_cam()
+
+
 func _update_hover() -> void:
-	var grid := (get_local_mouse_position() - _off - MAP) / CELL
-	var inside := grid.x >= 0 and grid.y >= 0 and grid.x < GData.W and grid.y < GData.H and get_viewport().gui_get_hovered_control() == self
+	var mp := get_local_mouse_position() - _off
+	var grid := (mp - MAP) / CELL
+	var inside := grid.x >= 0 and grid.y >= 0 and grid.x < GData.W and grid.y < GData.H and get_viewport().gui_get_hovered_control() == self and not _over_hud(mp)
 	hover = grid if inside else Vector2(-1, -1)
 	if _trail.is_empty() or not inside:
 		return
@@ -1439,7 +1531,7 @@ func _update_hud() -> void:
 	if call_btn.visible:
 		var mine := bool(m.players[s.seat].get("call", false))
 		var alive := int(m.enemies.size())
-		call_btn.text = ("일찍 부르기 +%d골드 %d/%d" if GData.LAYOUT == "v2" else "일찍 +%d %d/%d") % [GData.early_bonus(alive), m.call_votes(), m.online_count()]
+		call_btn.text = "일찍 +%d · %d/%d" % [GData.early_bonus(alive), m.call_votes(), m.online_count()]
 		if mine:
 			call_btn.text = "부르기 취소 %d/%d" % [m.call_votes(), m.online_count()]
 		_style(call_btn, "sec" if mine else "pri")
@@ -1729,6 +1821,41 @@ func _gui_input(ev: InputEvent) -> void:
 		_wheel = {}
 		s.command({"op": "ping", "kind": kind, "x": at.x, "y": at.y})
 		return
+	if ev is InputEventMouseButton and ev.pressed and (ev.button_index == MOUSE_BUTTON_WHEEL_UP or ev.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		_set_zoom(2 if ev.button_index == MOUSE_BUTTON_WHEEL_UP else 1, ev.position - _off)
+		return
+	if ev is InputEventMouseButton and ev.pressed and (ev.button_index == MOUSE_BUTTON_MIDDLE or ev.button_index == MOUSE_BUTTON_RIGHT):
+		_pan = {"from": ev.position, "cam": _cam, "button": ev.button_index, "moved": false}
+		if ev.button_index == MOUSE_BUTTON_MIDDLE:
+			return
+	if ev is InputEventMouseMotion and not _pan.is_empty():
+		var dd: Vector2 = ev.position - _pan["from"]
+		if dd.length() > 6.0:
+			_pan["moved"] = true
+		if _pan["moved"]:
+			if _zoom == 1:
+				_zoom = 2
+			_cam = Vector2(_pan["cam"]) - dd / (TILE * 2.0)
+			_overview_t = 0.0
+			_clamp_cam()
+		return
+	if ev is InputEventMouseButton and not ev.pressed and not _pan.is_empty() and ev.button_index == int(_pan["button"]):
+		var moved := bool(_pan["moved"])
+		_pan = {}
+		if moved or ev.button_index == MOUSE_BUTTON_MIDDLE:
+			return
+		mode = ""
+		selected = -1
+		return
+	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		var p: Vector2 = ev.position - _off
+		if _minimap_click(p) or _arrow_click(p):
+			return
+		if _over_hud(p):
+			return
+	if ev is InputEventMouseMotion and (ev.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 and _minimap_rect().has_point(ev.position - _off) and _trail.is_empty() and _drag.is_empty():
+		_minimap_click(ev.position - _off)
+		return
 	if ev is InputEventMouseMotion and not _drag.is_empty():
 		var g: Vector2 = (ev.position - _off - MAP) / CELL
 		if Vector2i(g) != _drag["from"] and s.m.phase == "prep":
@@ -1754,10 +1881,7 @@ func _gui_input(ev: InputEvent) -> void:
 		_menu_open = false
 		var grid: Vector2 = (ev.position - _off - MAP) / CELL
 		var inside := grid.x >= 0 and grid.y >= 0 and grid.x < GData.W and grid.y < GData.H
-		if ev.button_index == MOUSE_BUTTON_RIGHT:
-			mode = ""
-			selected = -1
-		elif ev.button_index == MOUSE_BUTTON_LEFT and inside:
+		if ev.button_index == MOUSE_BUTTON_LEFT and inside:
 			if ev.alt_pressed:
 				_wheel = {"at": grid, "from": ev.position - _off}
 			else:
@@ -1820,7 +1944,7 @@ func _draw_quick() -> void:
 		var b := Rect2(r.position + Vector2(12, 36 + i * 38), Vector2(206, 32))
 		_metal(b, PANEL_HI, PANEL_LO, LINE, 4.0)
 		_t(b.position + Vector2(84, 7), QUICK[i], T.STRONG, INK, 1)
-		_key_chip(b.position + Vector2(170, 6), "F%d" % (i + 1))
+		_key_chip(b.position + Vector2(170, 6), str(i + 1))
 
 
 func _click(grid: Vector2) -> void:
@@ -1907,6 +2031,10 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 	match ev.keycode:
 		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
 			var i: int = ev.keycode - KEY_1
+			if _quick_open and i < QUICK.size():
+				s.command({"op": "chat", "text": QUICK[i]})
+				_quick_open = false
+				return
 			if i < slot_btns.size() and not slot_btns[i].disabled:
 				_on_slot(i)
 		KEY_K:
@@ -1917,13 +2045,23 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 				if road_btns["undo"].visible and not road_btns["undo"].disabled:
 					_on_undo()
 			else:
-				_key_mode("road:draw", road_btns["draw"])
+				_set_zoom(2, get_local_mouse_position() - _off)
+		KEY_X:
+			_set_zoom(1)
+		KEY_G:
+			_key_mode("road:draw", road_btns["draw"])
+		KEY_H:
+			_cam_to(Vector2(GData.CASTLE.get_center()))
+		KEY_T:
+			_quick_open = not _quick_open
 		KEY_E:
 			if confirm_btn.visible and not confirm_btn.disabled:
 				_on_confirm()
 		KEY_Q: _key_mode("ability", ability_btn)
 		KEY_F1, KEY_F2, KEY_F3, KEY_F4:
-			s.command({"op": "chat", "text": QUICK[ev.keycode - KEY_F1]})
+			var e: int = ev.keycode - KEY_F1
+			if e < s.m.board.paths.size():
+				_cam_to(Vector2(s.m.board.paths[e][0]) + Vector2(0.5, 0.5))
 		KEY_SPACE: _on_ready()
 		KEY_N: _on_call()
 
@@ -2149,16 +2287,31 @@ func _p(g: Vector2) -> Vector2:
 ## 지도 그림: 픽셀 원본을 칸 배율(칸/19)대로 키운다
 func _frame_rect() -> Rect2:
 	var tex := _tex(_theme, "base")
-	return Rect2(_p(Vector2.ZERO) - MAP, tex.get_size() * (CELL / TILE))
+	var k := CELL / TILE
+	return Rect2(_p(Vector2.ZERO) - GData.ART_ORIGIN * k, tex.get_size() * k)
+
+
+func _frame_rect_for(theme: int) -> Rect2:
+	var tex := _tex(theme, "base")
+	var k := CELL / TILE
+	return Rect2(MAP - GData.ART_ORIGIN * k, tex.get_size() * k)
+
+
+## 화면에 보이는 부분만 그린다
+func _draw_tex_clip(tex: Texture2D, dst: Rect2, tint := Color.WHITE) -> void:
+	var view := Rect2(-_off, get_viewport_rect().size)
+	var vis := dst.intersection(view)
+	if vis.size.x <= 0 or vis.size.y <= 0:
+		return
+	var k := dst.size.x / tex.get_size().x
+	var src := Rect2((vis.position - dst.position) / k, vis.size / k)
+	draw_texture_rect_region(tex, vis, src, tint)
 
 
 func _draw_ground(theme := -1) -> void:
 	var tex := _tex(_theme if theme < 0 else theme, "base")
-	var v := get_viewport_rect().size
-	if v.x > STAGE.x + 1 or v.y > STAGE.y + 1:      # 화면이 더 크면 같은 지형을 어둡게 늘려 가장자리를 채운다
-		var sc := maxf(v.x / STAGE.x, v.y / STAGE.y)
-		draw_texture_rect(tex, Rect2(-_off - (STAGE * sc - v) * 0.5, STAGE * sc), false, Color(0.55, 0.55, 0.58))
-	draw_texture_rect(tex, _frame_rect(), false)
+	_prect(Rect2(-_off, get_viewport_rect().size), Color("1E2A1A"))
+	_draw_tex_clip(tex, _frame_rect())
 
 
 func _draw_grid(m: GMatch) -> void:
@@ -2368,7 +2521,7 @@ func _draw_chevrons(path: Array, col := Color(0.1, 0.08, 0.05, 0.8)) -> void:
 
 
 func _draw_over(theme := -1) -> void:
-	draw_texture_rect(_tex(_theme if theme < 0 else theme, "over"), _frame_rect(), false)
+	_draw_tex_clip(_tex(_theme if theme < 0 else theme, "over"), _frame_rect())
 
 
 ## 체력이 줄면 연기·경고등·외벽 손상 (테마 장식과 별개)
@@ -2875,24 +3028,23 @@ func _draw_title(at: Vector2, _px: int) -> void:
 
 func _draw_menu() -> void:
 	var v := get_viewport_rect().size
-	var sc := 1.0
-	var shift := Vector2(180, 38)
-	var tex := _tex(0, "base")
+	if GData.LAYOUT != "v2":
+		GData.use_layout(2)
 	_prect(Rect2(-_off, v), Color("1E2A1A"))
-	draw_set_transform_matrix(Transform2D(0.0, Vector2(sc, sc), 0.0, _off + shift))
 	var keep := _shake
 	_shake = 0.0
-	draw_texture_rect(tex, Rect2(Vector2.ZERO, STAGE), false)
+	CELL = TILE * 2.0
+	MAP = (Vector2(880, 380) - Vector2(GData.CASTLE.get_center()) * CELL / 1.0 / 2.0 * 2.0).floor()
+	MAP = (MAP / 2.0).floor() * 2.0
+	_draw_tex_clip(_tex(0, "base"), _frame_rect_for(0))
 	for path in Board.new(2).paths:
 		_draw_road(path, 0)
-	draw_texture_rect(_tex(0, "over"), Rect2(Vector2.ZERO, STAGE), false)
-	var demo := [["cannon", Vector2i(3, 0), 0], ["sniper", Vector2i(1, 2), 1], ["gun", Vector2i(10, 2), 0], ["shock", Vector2i(14, 3), 1], ["cold", Vector2i(15, 5), 0], ["cannon", Vector2i(3, 9), 1], ["gun", Vector2i(10, 8), 1]]
-	if GData.LAYOUT != "v2":
-		demo = []
+	_draw_tex_clip(_tex(0, "over"), _frame_rect_for(0))
+	var demo := [["cannon", Vector2i(13, 5), 0], ["sniper", Vector2i(14, 6), 1], ["gun", Vector2i(18, 6), 0], ["shock", Vector2i(24, 14), 1],
+		["cold", Vector2i(27, 17), 0], ["cannon", Vector2i(22, 17), 1], ["gun", Vector2i(16, 8), 1], ["flame", Vector2i(24, 18), 0]]
 	for d in demo:
 		_tower_sprite(d[0], 2, "", d[2], _p(Vector2(d[1])), CELL)
 	_shake = keep
-	draw_set_transform(_off)
 	# 왼쪽 판 + 디더 가장자리
 	_prect(Rect2(-_off.x, -_off.y, 380 + _off.x, v.y), Color("1A1917"))
 	_dim_screen(Rect2(380, -_off.y, 40, v.y))
@@ -3177,63 +3329,38 @@ func _dashed_rect(r: Rect2, col: Color) -> void:
 
 
 func _draw_mini(r: Rect2, m) -> void:
+	_draw_schematic(r, m)
+
+
+## 작은 지도 도식: 칸 크기는 짝수 px 정수 (로비는 인원으로, 결과는 경기 상태로)
+func _draw_schematic(r: Rect2, m = null) -> void:
 	if m == null:
-		_draw_schematic(r)
-		return
-	var view := Rect2(MAP - Vector2(16, 16), Vector2(GData.W, GData.H) * CELL + Vector2(32, 32))
-	var scale := 0.5
-	var at := _ev(r.position + (r.size - view.size * scale) * 0.5)
-	var base := Transform2D(0.0, Vector2(scale, scale), 0.0, _off + at - view.position * scale)
-	draw_set_transform_matrix(base)
-	var keep := _shake
-	_shake = 0.0
-	var theme: int = GData.theme_of(m.wave)
-	var kk := CELL / TILE
-	var src := Rect2(view.position / kk, view.size / kk)
-	draw_texture_rect_region(_tex(theme, "base"), view, src)
-	var worst := -1
-	if not m.cleared and s.state != "lost":
-		worst = _worst_gate(m)
-	_mini_clip = true
-	for e in m.board.paths.size():
-		_draw_road(m.board.paths[e], theme, e == worst)
-	_mini_clip = false
-	draw_texture_rect_region(_tex(theme, "over"), view, src)
-	for id in m.towers:
-		var t: Dictionary = m.towers[id]
-		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), int(m.players[int(t["owner"])].get("col", 0)) % 4, _p(Vector2(int(t["x"]), int(t["y"]))), CELL)
-	_shake = keep
-	draw_set_transform(_off)
-
-
-## 로비의 작은 지도: 칸 하나를 4픽셀(화면 8px) 도식으로
-func _draw_schematic(r: Rect2) -> void:
-	GData.use_layout(maxi(s.seats.size(), 2))
-	MAP = GData.ORIGIN
-	CELL = GData.CELL_PX
-	var c := 12.0 if GData.W <= 21 else 10.0
+		GData.use_layout(maxi(s.seats.size(), 2))
+	var c := floorf(minf(r.size.x / GData.W, r.size.y / GData.H) / 2.0) * 2.0
 	var size := Vector2(GData.W, GData.H) * c
 	var at := _ev(r.position + (r.size - size) * 0.5)
 	_prect(Rect2(at - Vector2(4, 4), size + Vector2(8, 8)), OUTLINE)
 	_prect(Rect2(at, size), Color("4E6A34"))
-	for y in GData.H:
-		for x in GData.W:
-			if (x * 7 + y * 13) % 11 == 0:
-				_prect(Rect2(at + Vector2(x, y) * c + Vector2(4, 4), Vector2(2, 2)), Color("6C8A45"))
-	var lanes := Board.new(GData.lanes_for(s.seats.size())).paths
-	for p in lanes:
-		for cell in p:
-			_prect(Rect2(at + Vector2(cell) * c, Vector2(c, c)), Color("C09A3A"))
-	for p in lanes:
-		for cell in p:
-			_prect(Rect2(at + Vector2(cell) * c + Vector2(2, 2), Vector2(c - 4, c - 4)), Color("9A958B"))
-	for pd in GData.PONDS:
-		_prect(Rect2(at + Vector2(pd.position) * c, Vector2(pd.size) * c), Color("3E6E8C"))
+	for rr in GData.RIVERS + GData.PONDS:
+		_prect(Rect2(at + Vector2((rr as Rect2i).position) * c, Vector2((rr as Rect2i).size) * c), Color("3E6E8C"))
+	for rr in GData.HIGH:
+		_prect(Rect2(at + Vector2((rr as Rect2i).position) * c, Vector2((rr as Rect2i).size) * c), Color("6C8A45"))
+	var lanes: Array = m.board.paths if m != null else Board.new(GData.lanes_for(s.seats.size())).paths
+	var worst := -1
+	if m != null and not m.cleared and s.state != "lost":
+		worst = _worst_gate(m)
+	for e in lanes.size():
+		for cell in lanes[e]:
+			_prect(Rect2(at + Vector2(cell) * c, Vector2(c, c)), LAMP if e == worst else Color("A8A296"))
 	var cs := GData.CASTLE
 	_prect(Rect2(at + Vector2(cs.position) * c, Vector2(cs.size) * c), OUTLINE)
 	_prect(Rect2(at + Vector2(cs.position) * c + Vector2(2, 2), Vector2(cs.size) * c - Vector2(4, 4)), Color("8C939A"))
-	for k in 3:
-		_prect(Rect2(at + Vector2(cs.position) * c + Vector2(6 + k * 8, 10), Vector2(4, 4)), AMBER)
+	if m != null:
+		for id in m.towers:
+			var t: Dictionary = m.towers[id]
+			var col := int(m.players[int(t["owner"])].get("col", 0)) % 4
+			_prect(Rect2(at + Vector2(int(t["x"]), int(t["y"])) * c, Vector2(c, c)), OUTLINE)
+			_prect(Rect2(at + Vector2(int(t["x"]), int(t["y"])) * c + Vector2(2, 2), Vector2(c - 4, c - 4)), OWNER[col])
 
 
 ## 새로 열린 입구 (그림에 없는 입구): 경고등 기둥 두 개 + 번호판
@@ -3257,8 +3384,8 @@ func _draw_game() -> void:
 	for path in m.board.paths:         # 03 길
 		_draw_road(path)
 		_draw_chevrons(path)
-	if not m.board.opened:             # 아직 닫힌 길: 흐린 점선 (그 땅은 지을 수 있다)
-		var ex: Array = GData.EXTRA_PATH
+	if m.board.extra < GData.EXTRA_PATHS.size():      # 다음 테마에 열릴 길: 흐린 점선 (그 땅은 지을 수 있다)
+		var ex: Array = GData.EXTRA_PATHS[m.board.extra]
 		for i in range(1, ex.size()):
 			_pdash(_p(Vector2(ex[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(ex[i]) + Vector2(0.5, 0.5)), Color(1, 1, 1, 0.28), 3.0, 7.0)
 	for jn in m.board.junctions():     # 합류 지점: 뚫리면 적이 한꺼번에 온다
@@ -3269,8 +3396,6 @@ func _draw_game() -> void:
 	_draw_grid(m)
 	_draw_draft(m, edit)
 	_draw_over()                       # 04~05 작업장·랜드마크·본부·입구
-	if m.board.opened and GData.LAYOUT == "v2":      # 2인 유령 숲의 새 입구는 그림에 없어 직접 그린다
-		_draw_gate(m.board.paths[-1][0], m.board.paths.size() - 1)
 	_draw_castle_damage(m)
 	var stand := []      # 서 있는 것은 아래쪽(y)이 큰 것을 나중에 그린다
 	for id in m.towers:
@@ -3323,6 +3448,8 @@ func _draw_game() -> void:
 	_draw_team(m)
 	_draw_side(m)
 	_draw_chat()
+	_draw_minimap(m)
+	_draw_arrows(m)
 	_draw_bar(m)
 	_draw_plates(hud)
 	_draw_bar_art(m)
@@ -3449,21 +3576,12 @@ func _ly() -> Dictionary:
 	var combat := s != null and s.m != null and s.m.phase != "prep"
 	var n := 2 if s == null or s.m == null else s.m.players.size()
 	var drawing := mode.begins_with("road:") or (s != null and s.m != null and s.m.drafts.has(s.seat)) or not _trail.is_empty()
-	var L: Dictionary
-	if GData.LAYOUT == "v4":
-		L = {"four": true, "castle": Rect2(4, 4, 280, 46), "wave": Rect2(496, 4, 288, 46), "mat": Rect2(996, 4, 240, 46),
-			"pause": Rect2(1244, 4, 32, 46), "banner": 56.0, "x0": 4.0, "w": 156.0, "top": 148.0, "rx": 1120.0,
-			"chat_min": Rect2(4, 500, 156, 40), "chat_max": Rect2(4, 300, 156, 240),
-			"bar": Rect2(0, 638, 1280, 82), "gold": Rect2(4, 644, 120, 72), "ability": Rect2(128, 644, 64, 72),
-			"slot": Vector2(76, 72), "slot_x": 200.0, "slot_y": 644.0, "slot_gap": 82.0, "kit": Rect2(612, 644, 44, 72),
-			"ping_x": 666.0, "ping_y": 644.0, "ready": Rect2(900, 644, 372, 72)}
-	else:
-		L = {"four": false, "castle": Rect2(8, 8, 280, 46), "wave": Rect2(500, 8, 278, 46), "mat": Rect2(992, 8, 244, 46),
-			"pause": Rect2(1244, 8, 28, 46), "banner": 68.0, "x0": 8.0, "w": 204.0, "top": 114.0, "rx": 1030.0,
-			"chat_min": Rect2(8, 566, 204, 40), "chat_max": Rect2(8, 400, 204, 208),
-			"bar": Rect2(0, 618, 1280, 102), "gold": Rect2(8, 628, 140, 84), "ability": Rect2(154, 632, 76, 78),
-			"slot": Vector2(84, 78), "slot_x": 248.0, "slot_y": 632.0, "slot_gap": 92.0, "kit": Rect2(712, 632, 50, 78),
-			"ping_x": 780.0, "ping_y": 632.0, "ready": Rect2(1010, 630, 262, 82)}
+	var L: Dictionary = {"four": false, "castle": Rect2(8, 8, 280, 46), "wave": Rect2(500, 8, 278, 46), "mat": Rect2(992, 8, 244, 46),
+		"pause": Rect2(1244, 8, 28, 46), "banner": 68.0, "x0": 8.0, "w": 204.0, "top": 114.0, "rx": 1030.0,
+		"chat_min": Rect2(8, 456, 204, 40), "chat_max": Rect2(8, 250, 204, 246), "mini": Rect2(8, 504, 204, 108),
+		"bar": Rect2(0, 618, 1280, 102), "gold": Rect2(8, 628, 140, 84), "ability": Rect2(154, 632, 76, 78),
+		"slot": Vector2(84, 78), "slot_x": 248.0, "slot_y": 632.0, "slot_gap": 92.0, "kit": Rect2(712, 632, 50, 78),
+		"ping_x": 780.0, "ping_y": 632.0, "ready": Rect2(1010, 630, 262, 82)}
 	var x0: float = L["x0"]
 	var w: float = L["w"]
 	var top: float = L["top"]
@@ -3473,14 +3591,159 @@ func _ly() -> Dictionary:
 		L["chat_max"] = Rect2(x0, top, w, (L["chat_min"] as Rect2).end.y - top)
 	L["chat"] = L["chat_max"] if (chat_open or _chat_typing) else L["chat_min"]
 	var rx: float = L["rx"]
-	var rw := 1272.0 - rx if not L["four"] else 156.0
+	var rw := 1272.0 - rx
 	L["team"] = Rect2(rx, top, rw, 44 + n * 26)
 	var ry := (L["team"] as Rect2).end.y + 10
 	L["side"] = Rect2(rx, ry, rw, 160)
 	L["insp"] = Rect2(rx, ry, rw, 300)
-	L["call"] = Rect2(rx, (L["chat_min"] as Rect2).position.y - 8 if L["four"] else 566.0, rw, 40)
+	L["call"] = Rect2(rx, 566.0, rw, 40)
 	L["hint"] = (L["bar"] as Rect2).position.y - 44
 	return L
+
+
+## 이 자리가 HUD 판 위인지 (지도 클릭이 아님)
+func _over_hud(p: Vector2) -> bool:
+	if _screen != "game" or s == null or s.m == null:
+		return false
+	var L := _ly()
+	var rects: Array = [L["castle"], L["wave"], L["mat"], L["pause"], L["chat"], L["mini"], L["team"], L["bar"]]
+	if s.m.phase == "prep":
+		rects.append(L["road"])
+		if not _proposal(s.m).is_empty():
+			rects.append(L["prop"])
+	rects.append(L["insp"] if s.m.towers.has(selected) else _side_rect)
+	if call_btn.visible:
+		rects.append(L["call"])
+	for r in rects:
+		if (r as Rect2).has_point(p):
+			return true
+	return false
+
+
+var _side_rect := Rect2()
+var _view_send_t := 0.0
+var _arrows: Array = []        # 화면 밖 알림 [{r, g}]
+
+
+func _minimap_rect() -> Rect2:
+	if _screen != "game" or s == null or s.m == null:
+		return Rect2()
+	return _ly()["mini"]
+
+
+## 작은 지도 안: 한 칸 = 4px (52칸 맵은 3px)
+func _minimap_cell() -> float:
+	return 4.0 if GData.W <= 40 else 3.0
+
+
+func _minimap_origin() -> Vector2:
+	var r := _minimap_rect()
+	var c := _minimap_cell()
+	return _ev(r.get_center() - Vector2(GData.W, GData.H) * c * 0.5)
+
+
+func _minimap_click(p: Vector2) -> bool:
+	var r := _minimap_rect()
+	if not r.has_point(p):
+		return false
+	var g := (p - _minimap_origin()) / _minimap_cell()
+	if _zoom == 1:
+		_zoom = 2
+	_cam_to(g)
+	return true
+
+
+func _arrow_click(p: Vector2) -> bool:
+	for a in _arrows:
+		if (a["r"] as Rect2).grow(4).has_point(p):
+			if _zoom == 1:
+				_zoom = 2
+			_cam_to(a["g"])
+			return true
+	return false
+
+
+func _draw_minimap(m: GMatch) -> void:
+	var r := _minimap_rect()
+	_nine(r, "panel_steel")
+	var c := _minimap_cell()
+	var o := _minimap_origin()
+	_prect(Rect2(o - Vector2(2, 2), Vector2(GData.W, GData.H) * c + Vector2(4, 4)), OUTLINE)
+	_prect(Rect2(o, Vector2(GData.W, GData.H) * c), Color("4E6A34"))
+	for rr in GData.RIVERS + GData.PONDS:
+		_prect(Rect2(o + Vector2((rr as Rect2i).position) * c, Vector2((rr as Rect2i).size) * c), Color("3E6E8C"))
+	for rr in GData.HIGH:
+		_prect(Rect2(o + Vector2((rr as Rect2i).position) * c, Vector2((rr as Rect2i).size) * c), Color("6C8A45"))
+	for p in m.board.paths:
+		for cell in p:
+			_prect(Rect2(o + Vector2(cell) * c, Vector2(c, c)), Color("A8A296"))
+	for e in m.board.paths.size():
+		_prect(Rect2(o + Vector2(m.board.paths[e][0]) * c - Vector2(2, 2), Vector2(c + 4, c + 4)), AMBER)
+	var cs := GData.CASTLE
+	_prect(Rect2(o + Vector2(cs.position) * c, Vector2(cs.size) * c), INK)
+	for id in m.towers:
+		var t: Dictionary = m.towers[id]
+		var col := int(m.players[int(t["owner"])].get("col", 0)) % 4
+		_prect(Rect2(o + Vector2(int(t["x"]), int(t["y"])) * c, Vector2(c, c)), OWNER[col])
+	for en in m.enemies:
+		var pos := Board.pos_on(m.board.paths[int(en["e"])], float(en["dist"]))
+		_prect(Rect2(_ev(o + pos * c - Vector2(1, 1)), Vector2(2, 2)), LAMP)
+	for pg in s.pings:
+		_prect(Rect2(_ev(o + Vector2(float(pg["x"]), float(pg["y"])) * c - Vector2(3, 3)), Vector2(6, 6)), AMBER, false, 2.0)
+	# 내가 보는 곳
+	var view_a := (Vector2(220, 60) - MAP) / CELL
+	var view_b := (Vector2(1022, 612) - MAP) / CELL
+	var vr := Rect2(o + view_a * c, (view_b - view_a) * c).intersection(Rect2(o, Vector2(GData.W, GData.H) * c))
+	if vr.size.x > 0:
+		_prect(Rect2(_ev(vr.position), _ev(vr.size)), Color.WHITE, false, 2.0)
+	_view_send_t -= get_process_delta_time()
+	if _view_send_t <= 0.0:
+		_view_send_t = 0.5
+		s.set_view([snappedf(view_a.x, 0.5), snappedf(view_a.y, 0.5), snappedf(view_b.x - view_a.x, 0.5), snappedf(view_b.y - view_a.y, 0.5)])
+	for k in s.views:      # 팀원이 보고 있는 곳
+		if int(k) == s.seat or int(k) >= m.players.size():
+			continue
+		var v: Array = s.views[k]
+		var tr := Rect2(o + Vector2(float(v[0]), float(v[1])) * c, Vector2(float(v[2]), float(v[3])) * c).intersection(Rect2(o, Vector2(GData.W, GData.H) * c))
+		if tr.size.x > 0:
+			_prect(Rect2(_ev(tr.position), _ev(tr.size)), OWNER[int(m.players[int(k)].get("col", 0)) % 4], false, 2.0)
+
+
+## 화면 밖 핑·본부 가까운 적은 가장자리 화살표
+func _draw_arrows(m: GMatch) -> void:
+	_arrows = []
+	var area := Rect2(228, 112, 786, 496)
+	var targets := []
+	for pg in s.pings:
+		targets.append([Vector2(float(pg["x"]), float(pg["y"])), OWNER[_col_of_seat(int(pg["seat"])) % 4]])
+	var cc := Vector2(GData.CASTLE.get_center())
+	for en in m.enemies:
+		var pos := Board.pos_on(m.board.paths[int(en["e"])], float(en["dist"]))
+		if pos.distance_to(cc) <= 4.5:
+			targets.append([pos, LAMP])
+			break
+	for tg in targets:
+		var sp := MAP + Vector2(tg[0]) * CELL
+		if area.has_point(sp):
+			continue
+		var c := area.get_center()
+		var d := (sp - c)
+		var k := minf(absf(area.size.x * 0.5 / maxf(absf(d.x), 0.01)), absf(area.size.y * 0.5 / maxf(absf(d.y), 0.01)))
+		var at := _ev(c + d * minf(k, 1.0))
+		var r := Rect2(at - Vector2(16, 16), Vector2(32, 32))
+		_prect(r, OUTLINE)
+		_prect(r.grow(-2), tg[1])
+		_arrow_glyph(r.get_center(), d.normalized(), OUTLINE)
+		_arrows.append({"r": r, "g": tg[0]})
+
+
+func _arrow_glyph(c: Vector2, d: Vector2, col: Color) -> void:
+	for k in 4:
+		var p := _ev(c + d * (k * 2 - 2))
+		var side := Vector2(-d.y, d.x) * (6 - k * 2)
+		_prect(Rect2(_ev(p - side) - Vector2(1, 1), Vector2(2, 2)), col)
+		_prect(Rect2(_ev(p + side) - Vector2(1, 1), Vector2(2, 2)), col)
+	_prect(Rect2(_ev(c + d * 6) - Vector2(1, 1), Vector2(2, 2)), col)
 
 
 ## HUD 버튼 자리 (매 프레임, 배치가 맵마다 다르다)
@@ -3631,6 +3894,7 @@ func _draw_side(m: GMatch) -> void:
 				_tip(Vector2(pr.get_center().x, pr.end.y + 22), "%s · %s" % [who["name"], _proposal_reason(m, pe, after)])
 	if m.towers.has(selected):
 		_draw_inspector(m, _side_top(m))
+		_side_rect = _ly()["insp"]
 	else:
 		_draw_wave_info(m, _side_top(m))
 
@@ -3642,7 +3906,7 @@ func _draw_marks(m: GMatch) -> void:
 		var r := Rect2(db.position, db.size)
 		var on: bool = not db.disabled
 		_tx(Rect2(r.position + Vector2(10, 0), Vector2(r.size.x - 44, r.size.y)), "그리기", T.BODY, INK if on else SUB)
-		_key_chip(Vector2(r.end.x - 34, r.position.y + 13), "Z")
+		_key_chip(Vector2(r.end.x - 34, r.position.y + 13), "G")
 		_glyph_undo(road_btns["undo"].position + road_btns["undo"].size * 0.5, INK if not road_btns["undo"].disabled else SUB)
 		if confirm_btn.visible:
 			var cr := Rect2(confirm_btn.position, confirm_btn.size)
@@ -3795,7 +4059,7 @@ func _draw_tutorial(m: GMatch) -> bool:
 		_vis(tut_skip, false)
 		return false
 	var steps := [["1/3", "공구함에서 포탑을 골라 빈 칸에 지어요"],
-		["2/3", "Z 로 길 위 칸에서 끌어 길을 다시 그려요"],
+		["2/3", "G 로 길 위 칸에서 끌어 길을 다시 그려요"],
 		["3/3", "전투가 시작되면 Q 로 긴급 냉각"]]
 	var row: Array = steps[_tut]
 	var w := _sz(str(row[1]), T.LABEL).x + _sz("ESC 건너뛰기", T.LABEL).x + 100
@@ -4094,6 +4358,7 @@ func _draw_wave_info(m: GMatch, top: float) -> void:
 	for e in lanes:
 		need += ceili(maxf(orders[e].size(), 1) / float(per)) * row_h
 	r.size.y = minf(need + 8, (L["call"] as Rect2).position.y - 8 - r.position.y)
+	_side_rect = r
 	_nine(r, "panel_steel")
 	var title := "다음 웨이브" if m.phase == "prep" else "남은 적 %d" % (m.enemies.size() + m.queued())
 	_tx(Rect2(r.position + Vector2(10, 8), Vector2(r.size.x - 20, 24)), title, T.LABEL, SUB)
@@ -4339,8 +4604,8 @@ func _draw_pause() -> void:
 				_draw_settings_rows()
 			"help":
 				_modal(r, "조작 안내")
-				var keys := [["1-5", "공구함 포탑 고르기 · 빈 칸 클릭"], ["Z", "길 다시 그리기 · E 확정 · Ctrl+Z 되돌리기"], ["Q", "긴급 냉각 (전투 중 1회)"],
-					["Alt+클릭", "핑 · Alt 끌기로 핑 고르기"], ["T", "빠른 요청 · F1~F4"], ["SPACE", "준비 완료 / 취소"], ["Enter", "채팅 · Esc 로 닫기"], ["Esc", "취소 · 일시정지"]]
+				var keys := [["WASD", "카메라 이동 · Shift 빠르게 · H 본부 · F1~F4 입구"], ["휠 Z X", "x2 / x1 확대 · 가운데·우클릭 끌기 이동"], ["1-5", "공구함 포탑 고르기 · 빈 칸 클릭"],
+					["G", "길 다시 그리기 · E 확정 · Ctrl+Z 되돌리기"], ["Q", "긴급 냉각 (전투 중 1회)"], ["Alt+클릭", "핑 · T 빠른 요청"], ["SPACE", "준비 완료 / 취소"], ["Esc", "취소 · 일시정지"]]
 				for i in keys.size():
 					var row := Rect2(320, 136 + i * 54, 640, 46)
 					_nine(row, "panel_dark")

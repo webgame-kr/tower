@@ -20,6 +20,9 @@ var m: GMatch = null
 var seats: Array = []    # {peer, token, name, online}
 var chat: Array = []     # {seat, name, text, x?, y?}
 var pings: Array = []    # {seat, kind, x, y, t}
+var views: Dictionary = {}   # 자리 -> 보고 있는 곳 [x, y, w, h] (칸, 작은 지도에 팀원 색 테두리)
+var _view_sent := []
+var _view_t := 0.0
 var toasts: Array = []
 var fx: Array = []
 var outbox: Array = []   # 손님이 보내고 아직 승인받지 못한 요청 {id, c, t}
@@ -269,8 +272,35 @@ func _lobby_data() -> Dictionary:
 	return {"t": "lobby", "seats": names, "df": difficulty}
 
 
+## 내가 보는 곳: 0.5초마다 바뀌었을 때만 (손님 → 방장 → 모두)
+func set_view(r: Array) -> void:
+	if solo or net == null or seat < 0:
+		return
+	_view_t -= 0.0
+	if r == _view_sent:
+		return
+	_view_sent = r
+	views[seat] = r
+	if is_host:
+		net.broadcast({"t": "views", "v": _views_wire()})
+	elif _host_peer != "":
+		net.send_to(_host_peer, {"t": "view", "r": r})
+
+
+func _views_wire() -> Dictionary:
+	var out := {}
+	for k in views:
+		out[str(k)] = views[k]
+	return out
+
+
 func _host_msg(from: String, d: Dictionary) -> void:
 	match str(d.get("t", "")):
+		"view":
+			var vs := _seat_of(from)
+			if vs >= 0 and d.get("r") is Array:
+				views[vs] = d["r"]
+				net.broadcast({"t": "views", "v": _views_wire()})
 		"hello":
 			_hello(from, d)
 		"seat":
@@ -523,3 +553,8 @@ func _client_msg(from: String, d: Dictionary) -> void:
 			var row: Dictionary = d["p"]
 			row["seat"] = int(row["seat"])
 			_add_ping(row)
+		"views":
+			views = {}
+			var vv: Dictionary = d.get("v", {})
+			for k in vv:
+				views[int(k)] = vv[k]

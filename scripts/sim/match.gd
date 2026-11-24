@@ -695,7 +695,7 @@ func _move_enemies(dt: float) -> void:
 		if on_ice(cell):
 			boost = float(d.get("ice", GData.ICE_SPEED))
 		var slow := float(en["slow"]) * (1.0 - float(d.get("slow_res", 0.0)))
-		en["dist"] += float(d["speed"]) * boost * (1.0 - slow) * dt
+		en["dist"] += float(d["speed"]) * GData.SPEED_MUL * boost * (1.0 - slow) * dt
 		if on_lava(cell) and not bool(d.get("fireproof", false)):
 			en["hp"] = float(en["hp"]) - float(en["max"]) * GData.LAVA_RATE * dt
 			if float(en["hp"]) <= 0.0:
@@ -912,6 +912,8 @@ func tower_range(t: Dictionary) -> float:
 		r *= 1.0 + buff
 	if at.distance_to(sand_spot()) <= GData.SAND_RADIUS:
 		r *= GData.SAND_RANGE
+	if not is_trap(t) and GData.is_high(Vector2i(int(t["x"]), int(t["y"]))):
+		r += GData.HIGH_RANGE
 	return r
 
 
@@ -1042,9 +1044,10 @@ func _finish_wave() -> void:
 ## 다음 웨이브로: 테마가 바뀌면 지형 사건, 구성 새로 만들기
 func _advance() -> void:
 	wave += 1
-	if theme() == 4 and not board.opened:      # 유령 숲: 막힌 땅이 열리며 새 입구
+	while board.extra < mini(theme(), GData.EXTRA_PATHS.size()):      # 테마가 바뀔 때마다 새 입구
+		board.paths.append((GData.EXTRA_PATHS[board.extra] as Array).duplicate())
+		board.extra += 1
 		board.opened = true
-		board.paths.append(GData.EXTRA_PATH.duplicate())
 		gate_dmg.append(0)
 		fx.append({"k": "open", "e": board.paths.size() - 1})
 	_make_plan()
@@ -1088,7 +1091,7 @@ func to_data() -> Dictionary:
 	for s in players.size():
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "gd": gate_dmg,
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "gd": gate_dmg,
 		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "tl": _tower_log_data()}
 
 
@@ -1141,6 +1144,7 @@ func load_data(d: Dictionary) -> void:
 	version = int(d["v"])
 	board.load_data(d["pa"])
 	board.opened = bool(d.get("op", false))
+	board.extra = int(d.get("ex", 0))
 	gate_dmg = []
 	for v in d["gd"]:
 		gate_dmg.append(int(v))

@@ -67,14 +67,14 @@ func _init() -> void:
 	pump(h, c)
 	ok(c.state == "game" and c.m != null, "손님에게 경기 전달")
 
-	c.command({"op": "build", "type": "gun", "x": 3, "y": 2})
+	c.command({"op": "build", "type": "gun", "x": 5, "y": 3})
 	pump(h, c)
 	ok(h.m.towers.size() == 1 and c.m.towers.size() == 1, "손님 건설이 양쪽에 반영")
 	ok(h.m.players[1]["gold"] == GData.START_GOLD - 100 and c.m.players[1]["gold"] == GData.START_GOLD - 100, "골드는 호스트 기준")
 
 	# 승인 응답이 사라져 재전송돼도 두 번 결제되면 안 된다
 	a.drop_next = true
-	c.command({"op": "build", "type": "gun", "x": 2, "y": 2})
+	c.command({"op": "build", "type": "gun", "x": 7, "y": 3})
 	for _i in 60:
 		h.tick(0.05)
 		c.tick(0.05)

@@ -88,6 +88,22 @@ func _run() -> void:
 			g._cam = Vector2(m.towers[k]["x"], m.towers[k]["y"]) + Vector2(-3, 0)
 			break
 	await _save("u_inspect_other")
+	m.players[0]["kit"] = ["railgun", "gun", "cold", "spike"]
+	m.players[0]["gold"] = 2000
+	m.players[1]["gold"] = 2000
+	m.apply(0, {"op": "build", "type": "railgun", "x": 9, "y": 6})
+	var jid := -1
+	for k in m.towers:
+		if m.towers[k]["type"] == "railgun":
+			jid = k
+	g.selected = jid
+	g._cam = Vector2(12, 7)
+	await _save("u_joint")
+	m.apply(1, {"op": "chip", "id": jid})
+	while not bool(m.towers[jid]["done"]):
+		m.apply(1, {"op": "chip", "id": jid})
+	await _save("u_joint_done")
+	m.players[0]["gold"] = 1880
 	g._cam = Vector2(10, 7)
 	g.selected = -1
 	_play_to(m, 5)

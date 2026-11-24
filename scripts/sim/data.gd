@@ -287,6 +287,26 @@ const TOWERS := {
 		"a": {"label": "고철 더미", "desc": "맞은 자리 자성 장판 4초", "dmg": 22.0, "cd": 1.3, "range": 3.0, "splash": 0.8, "phys": true, "st": "mag", "puddle": 4.0, "puddle_st": "mag"},
 		"b": {"label": "강철구", "desc": "한 방 45 · 산산조각", "dmg": 45.0, "cd": 1.6, "range": 3.0, "phys": true},
 	},
+	"railgun": {
+		"name": "레일건", "role": "합동 · 일직선 관통", "cost": 400, "up": [0, 0], "joint": true, "art": 0,
+		"lv": [{"dmg": 120.0, "cd": 4.0, "range": 60.0, "rail": true, "phys": true, "vs_shock": 0.5}, {"dmg": 120.0, "cd": 4.0, "range": 60.0, "rail": true, "phys": true, "vs_shock": 0.5}],
+		"a": {"dmg": 120.0, "cd": 4.0, "range": 60.0, "rail": true}, "b": {"dmg": 120.0, "cd": 4.0, "range": 60.0, "rail": true},
+	},
+	"chiller": {
+		"name": "대형 냉각기", "role": "합동 · 반지름 4칸 냉기", "cost": 360, "up": [0, 0], "joint": true, "art": 1,
+		"lv": [{"dmg": 3.0, "cd": 0.8, "range": 4.0, "aura": true, "st": "cold"}, {"dmg": 3.0, "cd": 0.8, "range": 4.0, "aura": true, "st": "cold"}],
+		"a": {"dmg": 3.0, "cd": 0.8, "range": 4.0, "aura": true, "st": "cold"}, "b": {"dmg": 3.0, "cd": 0.8, "range": 4.0, "aura": true, "st": "cold"},
+	},
+	"smelter": {
+		"name": "제철로", "role": "합동 · 용암 줄기", "cost": 380, "up": [0, 0], "joint": true, "art": 2,
+		"lv": [{"dmg": 12.0, "cd": 0.5, "range": 3.0, "line": true, "fire": true, "st": "burn", "puddle": 3.0, "puddle_st": "burn"}, {"dmg": 12.0, "cd": 0.5, "range": 3.0, "line": true, "fire": true, "st": "burn", "puddle": 3.0, "puddle_st": "burn"}],
+		"a": {"dmg": 12.0, "cd": 0.5, "range": 3.0, "line": true}, "b": {"dmg": 12.0, "cd": 0.5, "range": 3.0, "line": true},
+	},
+	"relay": {
+		"name": "중계탑", "role": "합동 · 포탑 3개 연결", "cost": 320, "up": [0, 0], "joint": true, "art": 3,
+		"lv": [{"range": 2.0, "support": true, "relay": 3}, {"range": 2.0, "support": true, "relay": 3}],
+		"a": {"range": 2.0, "support": true, "relay": 3}, "b": {"range": 2.0, "support": true, "relay": 3},
+	},
 }
 
 # ── 상태와 반응 ──
@@ -351,6 +371,10 @@ const UNLOCK := [["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "s
 	["steam", "cryo", "searchlight"], ["crane", "scrap", "welder"], ["generator", "conveyor"], []]
 
 
+static func is_joint(type: String) -> bool:
+	return TOWERS.has(type) and bool(TOWERS[type].get("joint", false))
+
+
 static func unlocked(wave: int) -> Array:
 	var out := []
 	for t in theme_of(wave) + 1:
@@ -384,6 +408,13 @@ const WALL_TIME := 8.0
 const DROP_GOLD := 80
 const OVERLOAD_TIME := 10.0
 const VOLLEY_TIME := 5.0
+## 합동 설비: 2x2, 두 사람 이상이 내야 완성. 기초는 40%, 테마당 한 팀 1개 (최대 5)
+const JOINT_ORDER := ["railgun", "chiller", "smelter", "relay"]
+const JOINT_FOUND := 0.4
+const JOINT_CHIP := 0.25      # 기여 한 번 = 합계의 25% (10골드 단위)
+const RELAY_RANGE := 1.0
+const RELAY_HASTE := 0.2
+const RELAY_RX := 0.25
 const INVEST_SHARE := 0.25    # 투자 한 번 = 다음 강화비의 25% (10골드 단위로 내림)
 const INVEST_AUTO := 5.0      # 주인이 없으면 게이지가 찬 뒤 5초에 자동 강화        # 가시 덫개 수리에 드는 공사 자재
 
@@ -548,7 +579,8 @@ static func tower_stats(type: String, level: int, branch: String) -> Dictionary:
 		"st2": str(s.get("st2", "")), "st_alt": bool(s.get("st_alt", false)), "stun": float(s.get("stun", 0.0)),
 		"ramp": float(s.get("ramp", 0.0)), "volt": float(s.get("volt", 0.0)), "chain_up": int(s.get("chain_up", 0)),
 		"battery": int(s.get("battery", 0)), "knock": float(s.get("knock", 0.0)), "puddle_st": str(s.get("puddle_st", "oil")),
-		"flash": float(s.get("flash", 0.0)),
+		"flash": float(s.get("flash", 0.0)), "rail": bool(s.get("rail", false)), "vs_shock": float(s.get("vs_shock", 0.0)),
+		"relay": int(s.get("relay", 0)),
 	}
 
 

@@ -29,6 +29,7 @@ func _init() -> void:
 	_new_towers()
 	_invest()
 	_roles()
+	_joints()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -538,6 +539,59 @@ func _rx(a: String, b: String, o1 := 0, o2 := 0) -> Array:
 	m._apply_status(en, a, o1)
 	m._apply_status(en, b, o2)
 	return [m, en, near]
+
+
+func _joints() -> void:
+	var m := GMatch.new(["A", "B"], [["railgun", "gun", "cold", "spike"], ["relay", "gun", "cold", "spike"]])
+	m.players[0]["gold"] = 2000
+	m.players[1]["gold"] = 2000
+	var g0: int = m.players[0]["gold"]
+	ok(m.apply(0, {"op": "build", "type": "railgun", "x": 9, "y": 6}) == "" and int(m.players[0]["gold"]) == g0 - 160, "합동 설비 기초: 합계의 40%")
+	var id: int = m.towers.keys()[0]
+	var t: Dictionary = m.towers[id]
+	ok(m.tower_cells().has(Vector2i(10, 7)) and m.tower_cells().size() == 4, "2x2 칸 차지")
+	ok(m.apply(1, {"op": "build", "type": "relay", "x": 13, "y": 6}) != "", "테마당 한 팀 1개")
+	m.apply(0, {"op": "chip", "id": id})
+	m.apply(0, {"op": "chip", "id": id})
+	ok(m.apply(0, {"op": "chip", "id": id}) != "" and not bool(t["done"]), "혼자서는 완성할 수 없음")
+	ok(m.apply(1, {"op": "chip", "id": id}) == "" and bool(t["done"]), "다른 사람이 보태면 완성")
+	# 레일건: 일직선 관통
+	m.phase = "combat"
+	var a := _enemy(1, 3.0)
+	a["hp"] = 1000.0
+	var b := _enemy(2, 4.0)
+	b["hp"] = 1000.0
+	m.enemies = [a, b]
+	t["cd"] = 0.0
+	m._fire(0.05)
+	ok(float(a["hp"]) < 1000.0 and float(b["hp"]) < 1000.0, "레일건: 일직선의 적을 모두 맞힘")
+	# 판매: 기여한 모두 동의
+	m.phase = "prep"
+	var gold1: int = m.players[1]["gold"]
+	ok(m.apply(0, {"op": "sell", "id": id}) == "" and m.towers.has(id), "한 명 동의로는 안 팔림")
+	ok(m.apply(1, {"op": "sell", "id": id}) == "" and not m.towers.has(id) and int(m.players[1]["gold"]) > gold1, "모두 동의하면 낸 비율대로 돌려받음")
+	# 중계탑: 연결된 포탑 사거리 +1
+	var r := GMatch.new(["A", "B"], [["relay", "gun", "cold", "spike"], ["gun", "cold", "cannon", "spike"]])
+	r.players[0]["gold"] = 2000
+	r.players[1]["gold"] = 2000
+	r.apply(1, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	var gid: int = r.towers.keys()[0]
+	var before := r.tower_range(r.towers[gid])
+	r.apply(0, {"op": "build", "type": "relay", "x": 9, "y": 6})
+	var rid: int = r.towers.keys()[1]
+	r.apply(0, {"op": "chip", "id": rid})
+	r.apply(1, {"op": "chip", "id": rid})
+	while not bool(r.towers[rid]["done"]):
+		r.apply(1, {"op": "chip", "id": rid})
+	ok(r.linked(gid) and is_equal_approx(r.tower_range(r.towers[gid]), before + GData.RELAY_RANGE), "중계탑: 연결된 포탑 사거리 +1")
+	# 보스 다음 웨이브 카드 중 1장은 합동 설비
+	var w := GMatch.new(["A", "B"], [], 3)
+	w.wave = 5
+	w._advance()
+	ok(GData.JOINT_ORDER.has(str((w.players[0]["hand"] as Array)[-1])), "보스 다음 웨이브 카드 1장은 합동 설비")
+	var cp := GMatch.new()
+	cp.load_data(JSON.parse_string(JSON.stringify(r.to_data())))
+	ok(bool(cp.towers[rid]["done"]) and (cp.towers[rid]["links"] as Array).has(gid), "합동 설비 동기화")
 
 
 func _roles() -> void:

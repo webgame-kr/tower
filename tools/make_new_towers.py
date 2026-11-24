@@ -253,3 +253,77 @@ atlas.save(PATH)
 prev = atlas.crop((0, FH * 10, FW * 16, FH * rows)).resize((FW * 16 * 2, FH * len(NEW) * 2), Image.NEAREST)
 prev.save(os.path.join(ROOT, "art", "_new_towers_preview.png"))
 print("atlas", atlas.size)
+
+
+# ── 합동 설비 4종 (2x2, 한 칸 44x64): 레일건 · 대형 냉각기 · 제철로 · 중계탑 ──
+JW, JH = 44, 64
+joints = Image.new("RGBA", (JW * 4, JH))
+
+
+class JPen(Pen):
+    def px(self, x, y, c):
+        if 0 <= x < JW and 0 <= y < JH:
+            self.im.putpixel((self.ox + x, y), c + (255,))
+
+
+def jbase(p):
+    p.box(1, 52, 42, 11, M3, M2, M4)
+    p.rect(2, 53, 40, 2, M2)
+    for x in (5, 14, 23, 32, 39):
+        p.px(x, 60, M1)
+    p.rect(34, 55, 6, 3, Y1)
+
+
+def railgun(p):
+    p.box(8, 30, 28, 23, M2, M1, M4)
+    p.box(4, 20, 36, 11, M3, M2, M4)
+    p.box(2, 14, 40, 7, (70, 74, 82), M3, O)
+    p.rect(3, 16, 38, 1, (120, 200, 255))
+    for x in range(6, 40, 6):
+        p.rect(x, 22, 2, 8, (120, 200, 255))
+    p.disc(22, 40, 5, (40, 44, 50))
+    p.disc(22, 40, 2, (120, 200, 255), (60, 110, 160))
+
+
+def chiller(p):
+    p.box(5, 22, 34, 31, (200, 214, 222), (236, 244, 248), (150, 166, 176))
+    p.disc(16, 36, 8, M3)
+    p.disc(16, 36, 6, (60, 66, 74))
+    for k in range(4):
+        p.rect(10 + k * 3, 35, 2, 2, (180, 230, 250))
+    p.box(28, 10, 9, 13, (220, 230, 236), (250, 250, 250), (160, 176, 186))
+    p.rect(29, 14, 7, 2, (110, 190, 230))
+    for x, y in [(8, 18), (12, 15), (17, 18), (22, 14)]:
+        p.rect(x, y, 3, 2, (214, 238, 248))
+
+
+def smelter(p):
+    p.box(6, 18, 32, 35, (120, 84, 64), (160, 116, 84), (80, 52, 40))
+    p.box(12, 6, 10, 13, (90, 64, 50), (130, 96, 72), (60, 40, 30))
+    p.rect(13, 3, 8, 3, (70, 70, 76))
+    p.box(14, 30, 16, 14, (40, 30, 26), (70, 50, 40), O)
+    p.rect(16, 34, 12, 8, (240, 120, 40))
+    p.rect(18, 36, 8, 4, (255, 200, 80))
+    p.box(30, 40, 12, 5, (90, 64, 50), (130, 96, 72), O)
+    p.rect(33, 45, 6, 2, (240, 120, 40))
+
+
+def relay(p):
+    p.box(16, 6, 12, 47, M2, M1, M4)
+    for y in range(10, 50, 6):
+        p.rect(17, y, 10, 1, M4)
+    p.box(4, 14, 36, 5, M3, M2, M4)
+    for x in (6, 22, 36):
+        p.disc(x, 12, 3, (230, 200, 90), (150, 120, 40))
+    p.disc(22, 4, 3, (255, 120, 90), (160, 60, 40))
+
+
+for i, fn in enumerate([railgun, chiller, smelter, relay]):
+    frame = Image.new("RGBA", (JW * 4, JH), (0, 0, 0, 0))
+    p = JPen(frame, i * JW)
+    jbase(p)
+    fn(p)
+    joints.alpha_composite(frame.crop((i * JW, 0, i * JW + JW, JH)), (i * JW, 0))
+joints.save(os.path.join(ROOT, "art", "joints.png"))
+joints.resize((JW * 4 * 3, JH * 3), Image.NEAREST).save(os.path.join(ROOT, "art", "_joints_preview.png"))
+print("joints", joints.size)

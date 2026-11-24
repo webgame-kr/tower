@@ -23,6 +23,8 @@ const TS := {
 const TEX_UI := preload("res://art/ui.png")
 const TEX_TOWERS := preload("res://art/towers.png")
 const TEX_ENEMIES := preload("res://art/enemies.png")
+const TEX_JOINTS := preload("res://art/joints.png")      # 합동 설비 2x2 (한 칸 44x64)
+const JW := Vector2(44, 64)
 const TEX_ICONS := preload("res://art/icons.png")
 
 const STAGE := Vector2(1280, 720)
@@ -127,6 +129,7 @@ var pick_btns: Array = []
 var lock_btns: Array = []
 var pick_go: Button
 var invest_btn: Button
+var chip_btn: Button
 var role_btn: Button
 var role_pick_btns: Array = []
 var give_btns: Array = []
@@ -549,6 +552,7 @@ func _build_hud() -> void:
 	fix_btn = _btn(hud, Rect2(), "수리 · 자재 1", _on_fix, "sec", T.LABEL)
 	sell_btn = _btn(hud, Rect2(), "", _on_sell, "sec", T.LABEL)
 	invest_btn = _btn(hud, Rect2(), "", _on_invest, "pri", T.LABEL)
+	chip_btn = _btn(hud, Rect2(), "", _on_chip, "pri", T.LABEL)
 	invest_btn.tooltip_text = "다음 강화비의 25% 를 내요 · 낸 만큼 피해 기록을 나눠 가져요"
 	noinv_btn = _btn(hud, Rect2(), "", _on_noinv, "sec", T.LABEL)
 	noinv_btn.tooltip_text = "팀원이 이 포탑에 투자하지 못하게 해요"
@@ -1327,6 +1331,16 @@ func _take_fx() -> void:
 				if int(f["to"]) == s.seat:
 					_inv_note = "%s이 %d골드%s" % [str(s.m.players[int(f["by"])]["name"]).left(6), int(f["n"]), " · 다시 뽑기 1회" if bool(f.get("drop", false)) else ""]
 					_inv_note_t = 2.0
+			"joint":
+				if int(f["by"]) != s.seat:
+					_inv_note = "%s · 합동 설비 기다림" % str(s.m.players[int(f["by"])]["name"]).left(6)
+					_inv_note_t = 2.0
+			"joint_done":
+				_inv_note = "합동 설비 완성"
+				_inv_note_t = 2.0
+			"joint_sell":
+				_inv_note = "합동 설비 판매 동의 %d/%d" % [int(f["n"]), int(f["of"])]
+				_inv_note_t = 2.0
 			"invest":
 				if int(f["o"]) == s.seat and s.m.towers.has(int(f["id"])):
 					var tt: Dictionary = s.m.towers[int(f["id"])]
@@ -1555,7 +1569,10 @@ func _update_hud() -> void:
 	var kit: Array = me["kit"]
 	for i in slot_btns.size():
 		var k: String = kit[i] if i < kit.size() else ""
-		slot_btns[i].disabled = k == "" or locked or not prep or int(me["gold"]) < int(GData.TOWERS[k]["cost"])
+		var kc := int(GData.TOWERS[k]["cost"]) if k != "" else 0
+		if k != "" and GData.is_joint(k):
+			kc = int(ceil(kc * GData.JOINT_FOUND / 10.0)) * 10
+		slot_btns[i].disabled = k == "" or locked or not prep or int(me["gold"]) < kc
 	build_btns["kit"].disabled = not prep
 	if prep and _pick_wave != m.wave:      # 준비 시작: 카드 띠가 올라온다
 		_pick_wave = m.wave
@@ -1638,6 +1655,29 @@ func _update_inspector(prep: bool) -> void:
 	if t.is_empty() or int(t["lv"]) != 2:
 		_branch_pick = false
 	var mine := not t.is_empty() and int(t["owner"]) == s.seat
+	var joint := not t.is_empty() and GData.is_joint(str(t["type"]))
+	_vis(chip_btn, joint and not bool(t.get("done", false)))
+	if joint:
+		var jr := _inspector_rect(m, t)
+		chip_btn.position = Vector2(jr.position.x + 8, jr.end.y - 56)
+		chip_btn.size = Vector2(jr.size.x - 16, 48)
+		var total: int = GData.TOWERS[t["type"]]["cost"]
+		var left := total - m.joint_paid(t)
+		var pay := mini(maxi(int(floor(total * GData.JOINT_CHIP / 10.0)) * 10, 10), left)
+		chip_btn.disabled = int(m.players[s.seat]["gold"]) < m.invest_price(s.seat, pay)
+		for k in prio_btns:
+			_vis(prio_btns[k], false)
+		_vis(up_btn, false)
+		_vis(a_btn, false)
+		_vis(b_btn, false)
+		_vis(invest_btn, false)
+		_vis(noinv_btn, false)
+		_vis(fix_btn, false)
+		_vis(move_btn, false)
+		_vis(sell_btn, (t["paid"] as Dictionary).has(s.seat) and m.phase == "prep" and bool(t.get("done", false)))
+		sell_btn.position = Vector2(jr.position.x + 8, jr.end.y - 56 - (56 if chip_btn.visible else 0))
+		sell_btn.size = Vector2(jr.size.x - 16, 48)
+		return
 	var show_prio: bool = mine and not (GMatch.is_trap(t) or t["type"] == "signal") if not t.is_empty() else false
 	var show_up := false
 	var show_ab := false
@@ -1837,6 +1877,10 @@ func _on_give(i: int) -> void:
 	if s.m == null or i == s.seat or i >= s.m.players.size():
 		return
 	s.command({"op": "give", "to": i, "n": 50})
+
+
+func _on_chip() -> void:
+	s.command({"op": "chip", "id": selected})
 
 
 func _on_invest() -> void:
@@ -2353,16 +2397,26 @@ func _mk(t: Dictionary) -> int:
 func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Vector2, cell_px: float, tint := Color.WHITE) -> void:
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
 	var k := cell_px / TILE
+	if GData.is_joint(type):
+		var ja := cell_pos + Vector2(cell_px - JW.x * 0.5 * k, cell_px * 2.0 - JW.y * k)
+		draw_texture_rect_region(TEX_JOINTS, Rect2(ja.round(), JW * k), Rect2(int(GData.TOWERS[type]["art"]) * JW.x, 0, JW.x, JW.y), tint)
+		return
 	var at := cell_pos + Vector2(cell_px * 0.5 - TW.x * 0.5 * k, cell_px - TW.y * k)
 	draw_texture_rect_region(TEX_TOWERS, Rect2(at.round(), TW * k), _tower_src(type, mk, col), tint)
 
 
 func _tower_src(type: String, mk: int, col: int) -> Rect2:
+	if GData.is_joint(type):
+		return Rect2(int(GData.TOWERS[type]["art"]) * JW.x, 0, JW.x, JW.y)
 	return Rect2((mk * 4 + col) * TW.x, int(TOWER_ROW[type]) * TW.y, TW.x, TW.y)
 
 
 ## 공구함 칸 아이콘: 2배 그대로, 칸 높이만큼 위쪽(머리)만
 func _tower_head(type: String, col: int, r: Rect2, tint := Color.WHITE) -> void:
+	if GData.is_joint(type):
+		var src := Rect2(int(GData.TOWERS[type]["art"]) * JW.x, 8, JW.x, minf(JW.y - 8, r.size.y * 0.5))
+		draw_texture_rect_region(TEX_JOINTS, Rect2(_ev(Vector2(r.get_center().x - JW.x, r.position.y)), src.size * 2.0), src, tint)
+		return
 	var src := _tower_src(type, 0, col)
 	var top := _art_top(src)
 	var rows := floorf(minf(TW.y - top, r.size.y * 0.5))
@@ -2402,6 +2456,14 @@ func _art_top(src: Rect2) -> float:
 
 ## 버튼·정보창 아이콘: 그림 전체를 r 안에 맞춘다
 func _tower_icon(type: String, lv: int, branch: String, col: int, r: Rect2, tint := Color.WHITE) -> void:
+	if GData.is_joint(type):
+		var jk := 1.0 if r.size.y >= JW.y else 0.0
+		if jk == 0.0:
+			var src := Rect2(int(GData.TOWERS[type]["art"]) * JW.x, 0, JW.x, minf(JW.y, r.size.y))
+			draw_texture_rect_region(TEX_JOINTS, Rect2(_ev(r.position + Vector2((r.size.x - JW.x) * 0.5, 0)), src.size), src, tint)
+		else:
+			draw_texture_rect_region(TEX_JOINTS, Rect2(_ev(r.position + (r.size - JW) * Vector2(0.5, 1.0)), JW), Rect2(int(GData.TOWERS[type]["art"]) * JW.x, 0, JW.x, JW.y), tint)
+		return
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
 	var k := 2.0 if r.size.x >= TW.x * 2.0 and r.size.y >= TW.y * 2.0 else 1.0
 	if k < 2.0 and (r.size.y < TW.y or r.size.x < TW.x):
@@ -2958,6 +3020,9 @@ func _banner(text: String, col: Color, danger := false) -> void:
 
 func _draw_tower(m: GMatch, t: Dictionary) -> void:
 	var at := _p(Vector2(int(t["x"]), int(t["y"])))
+	if GData.is_joint(str(t["type"])):
+		_draw_joint(m, t, at)
+		return
 	var contrib: Dictionary = t.get("contrib", {})
 	var li := 0
 	for k in contrib:
@@ -2990,6 +3055,38 @@ func _draw_tower(m: GMatch, t: Dictionary) -> void:
 		var center := at + Vector2(CELL, CELL) * 0.5
 		_parc(center, radius, 0, TAU, 0, Color.WHITE)
 		_corners(at, AMBER)
+
+
+## 합동 설비: 기초는 비계(낸 만큼 올라감) + 남은 값, 완성되면 그림 + 기여한 사람 색 줄무늬
+func _draw_joint(m: GMatch, t: Dictionary, at: Vector2) -> void:
+	var total: int = GData.TOWERS[t["type"]]["cost"]
+	var paid := m.joint_paid(t)
+	var payers: Dictionary = t.get("paid", {})
+	var area := Rect2(at, Vector2(CELL, CELL) * 2.0)
+	if bool(t.get("done", false)):
+		_tower_sprite(t["type"], 1, "", 0, at, CELL)
+	else:
+		_prect(Rect2(area.position + Vector2(2, area.size.y - 10), Vector2(area.size.x - 4, 8)), OUTLINE)
+		var lv := ceili(float(paid) / total * 4.0)
+		for k in lv:
+			var y := area.end.y - 12 - (k + 1) * CELL * 0.4
+			_prect(Rect2(area.position.x + 4, y, area.size.x - 8, 4), Color("8C939A"))
+			_prect(Rect2(area.position.x + 4, y, 4, CELL * 0.4), Color("6A6660"))
+			_prect(Rect2(area.end.x - 8, y, 4, CELL * 0.4), Color("6A6660"))
+		_hazard(Rect2(_ev(area.position + Vector2(4, area.size.y - 8)), _ev(Vector2(area.size.x - 8, 4))))
+		var label := "%d 남음" % (total - paid)
+		var w := _sz(label, T.LABEL).x + 16
+		var bub := Rect2(_ev(area.get_center() - Vector2(w * 0.5, area.size.y * 0.5 + 30)), _ev(Vector2(w, 28)))
+		_nine(bub, "panel_dark")
+		_tx(bub, label, T.LABEL, AMBER, 1)
+	var i := 0
+	for k in payers:      # 기여한 사람 색 띠
+		var c: Color = OWNER[int(m.players[int(k)].get("col", 0)) % 4]
+		_prect(Rect2(_ev(area.position + Vector2(4 + i * 10, area.size.y - 6)), Vector2(8, 4)), c)
+		i += 1
+	if int(t["id"]) == selected:
+		_corners(at, AMBER)
+		_corners(at + Vector2(CELL, CELL), AMBER)
 
 
 func _draw_enemy(m: GMatch, en: Dictionary) -> void:
@@ -3122,6 +3219,9 @@ func _dash_ring(center: Vector2, radius: float, col: Color, _w := 2.0, alpha := 
 
 ## 미리보기 포탑: 바둑판 디더(한 칸 건너 2x2 만 칠함)
 func _dither_tower(type: String, lv: int, branch: String, col: int, at: Vector2) -> void:
+	if GData.is_joint(type):
+		_tower_sprite(type, 1, "", col, at, CELL, Color(1, 1, 1, 0.55))
+		return
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
 	var src := _tower_src(type, mk, col)
 	var k := CELL / TILE
@@ -3171,6 +3271,12 @@ func _draw_cursor(m: GMatch) -> void:
 		if mode.begins_with("move:"):
 			cells.erase(Vector2i(int(m.towers[int(mode.substr(5))]["x"]), int(m.towers[int(mode.substr(5))]["y"])))
 		var ok := m.board.can_build(c, cells, m.theme(), trap) == ""
+		if GData.is_joint(type):
+			for dc in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]:
+				if m.board.can_build(c + dc, cells, m.theme(), false) != "":
+					ok = false
+			if not m.joint_room():
+				ok = false
 		var col := AMBER if ok else LAMP
 		var st := GData.tower_stats(type, lv, branch)
 		st["range"] = m.tower_range({"type": type, "lv": lv, "branch": branch, "x": c.x, "y": c.y})
@@ -3940,8 +4046,12 @@ func _draw_arrows(m: GMatch) -> void:
 	for pg in s.pings:
 		targets.append([Vector2(float(pg["x"]), float(pg["y"])), OWNER[_col_of_seat(int(pg["seat"])) % 4]])
 	for id in m.towers:
+		var jt: Dictionary = m.towers[id]
+		if GData.is_joint(str(jt["type"])) and not bool(jt.get("done", false)) and not (jt["paid"] as Dictionary).has(s.seat):
+			targets.append([Vector2(int(jt["x"]), int(jt["y"])) + Vector2(1, 1), AMBER])
+	for id in m.towers:
 		var tt: Dictionary = m.towers[id]
-		if int(tt["owner"]) == s.seat and m.next_up_cost(tt) > 0 and m.invest_gauge(tt) >= m.next_up_cost(tt):
+		if not GData.is_joint(str(tt["type"])) and int(tt["owner"]) == s.seat and m.next_up_cost(tt) > 0 and m.invest_gauge(tt) >= m.next_up_cost(tt):
 			targets.append([Vector2(int(tt["x"]), int(tt["y"])) + Vector2(0.5, 0.5), OK_GREEN])
 	var cc := Vector2(GData.CASTLE.get_center())
 	for en in m.enemies:
@@ -4368,6 +4478,8 @@ func _draw_bar_art(m: GMatch) -> void:
 		var b: Button = slot_btns[i]
 		var t := Rect2(b.position, b.size)
 		var cost := int(GData.TOWERS[names[i]]["cost"])
+		if GData.is_joint(str(names[i])):
+			cost = int(ceil(cost * GData.JOINT_FOUND / 10.0)) * 10
 		var afford := int(me["gold"]) >= cost
 		var usable_t: bool = not b.disabled
 		var picked: bool = mode == "build:" + str(names[i])
@@ -4489,6 +4601,9 @@ func _draw_kit(m: GMatch) -> void:
 		if fresh.has(k):
 			_prect(Rect2(c.end.x - 40, c.position.y + 6, 34, 18), AMBER)
 			_tx(Rect2(c.end.x - 40, c.position.y + 4, 34, 20), "NEW", T.KEY, AMBER_INK, 1)
+		if GData.is_joint(k):
+			_prect(Rect2(c.position.x + 4, c.position.y + 4, c.size.x - 8, 2), AMBER)
+			_tx(Rect2(c.end.x - 52, c.position.y + 4, 48, 22), "합동", T.LABEL, AMBER, 2)
 		_tower_icon(k, 1, "", my_col, Rect2(c.position + Vector2((cw - 50) * 0.5, 4), Vector2(50, 50)))
 		_tx(Rect2(c.position + Vector2(6, 56), Vector2(cw - 12, 24)), str(GData.TOWERS[k]["name"]), T.LABEL, INK)
 		var row2 := Rect2(c.position + Vector2(8, 82), Vector2(cw - 16, 24))
@@ -4602,6 +4717,8 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 	var tx := head.end.x + 10
 	_tx(Rect2(tx, r.position.y + 8, r.end.x - tx - 8, 28), str(d["name"]), T.STRONG, INK)
 	var mk := "MK-%d" % lv if lv < 3 else "MK-3%s" % str(t["branch"]).to_upper()
+	if GData.is_joint(str(t["type"])):
+		mk = "합동"
 	_tx(Rect2(tx, r.position.y + 38, 60, 24), mk, T.LABEL, AMBER)
 	_prect(Rect2(tx + _sz(mk, T.LABEL).x + 10, r.position.y + 46, 10, 10), OWNER[col])
 	var st := GData.tower_stats(t["type"], lv, str(t["branch"]))
@@ -4613,7 +4730,9 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 		_prect(Rect2(cx + 2, r.position.y + 46, 10, 10), Color(str(GData.STATUS[stn]["col"])))
 		_tx(Rect2(cx + 20, r.position.y + 38, 80, 24), str(GData.STATUS[stn]["name"]), T.LABEL, INK)
 	var rows: Array = []
-	if bool(st["support"]):
+	if GData.is_joint(str(t["type"])):
+		rows = [["합동 설비", "2x2"]]
+	elif bool(st["support"]):
 		if float(st["volt"]) > 0.0:
 			rows.append(["전기 피해", "+%d%%" % roundi(st["volt"] * 100)])
 		if float(st["buff"]) > 0.0:
@@ -4659,6 +4778,29 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 ## 판매·강화·갈래 카드 글자 (버튼 판 위)
 func _draw_insp_buttons(m: GMatch, t: Dictionary, mine: bool, prep: bool, lv: int) -> void:
 	var d: Dictionary = GData.TOWERS[t["type"]]
+	if GData.is_joint(str(t["type"])):
+		var r := _inspector_rect(m, t)
+		var total: int = d["cost"]
+		var paid := m.joint_paid(t)
+		var by := r.position.y + 150
+		_tx(Rect2(r.position.x + 10, by, r.size.x - 20, 24), "완성" if bool(t.get("done", false)) else "모인 돈", T.LABEL, OK_GREEN if bool(t.get("done", false)) else SUB)
+		_tx(Rect2(r.position.x + 10, by, r.size.x - 20, 24), "%d/%d" % [paid, total], T.KEY, AMBER, 2)
+		var bar := Rect2(r.position.x + 10, by + 26, r.size.x - 20, 10)
+		_prect(bar, OUTLINE)
+		var x := bar.position.x + 2
+		for k in t["paid"]:
+			var w := (bar.size.x - 4) * float(t["paid"][k]) / total
+			_prect(Rect2(x, bar.position.y + 2, w, 6), OWNER[int(m.players[int(k)].get("col", 0)) % 4])
+			x += w
+		_tx(Rect2(r.position.x + 10, by + 44, r.size.x - 20, 24), "두 사람 이상 내야 완성" if not bool(t.get("done", false)) else str(d["role"]), T.LABEL, SUB)
+		if chip_btn.visible:
+			var left := total - paid
+			var pay := mini(maxi(int(floor(total * GData.JOINT_CHIP / 10.0)) * 10, 10), left)
+			_tx(Rect2(chip_btn.position, chip_btn.size), "보태기 +%d" % pay, T.BODY, AMBER_INK if not chip_btn.disabled else SUB, 1)
+		if sell_btn.visible:
+			var ag: int = (t.get("agree", {}) as Dictionary).size()
+			_tx(Rect2(sell_btn.position, sell_btn.size), "판매 동의 %d/%d" % [ag, (t["paid"] as Dictionary).size()], T.BODY, INK, 1)
+		return
 	var cost := m.next_up_cost(t)
 	var gauge := m.invest_gauge(t)
 	if cost > 0 and (gauge > 0 or not mine):      # 투자 게이지: 다음 강화까지 모인 돈

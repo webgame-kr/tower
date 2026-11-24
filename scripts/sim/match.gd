@@ -27,6 +27,7 @@ var rx_log: Dictionary = {}     # 반응 이름 -> 이번 판 횟수
 var seen_rx: Array = []         # 이번 판에 처음 나온 순서대로 (반응 도감)
 var joint_dmg := 0.0            # 다른 사람 포탑끼리 만든 반응 피해
 var puddle_t: Dictionary = {}   # 기름 웅덩이 칸 -> [남은 시간, 주인]
+var _rx_boost := 0.0           # 중계탑에 연결된 포탑이 만든 반응
 var walls: Dictionary = {}      # 긴급 방벽 칸 -> 남은 시간 (적이 그 앞에서 멈춤)
 var hp_log: Array = []       # 웨이브마다 끝났을 때 본부 내구도 (결과 화면)
 var tower_log: Dictionary = {}  # 포탑 id -> [종류, 단계, 갈래, 주인, 피해, 처치] (결과 화면의 가장 일 많이 한 포탑)
@@ -71,6 +72,9 @@ func _deal() -> void:
 	for i in players.size():
 		var p: Dictionary = players[i]
 		p["hand"] = _hand_for(i, pool, used, rng)
+		if wave > 1 and (wave - 1) % GData.THEME_LEN == 0 and joint_room():
+			var jk: String = GData.JOINT_ORDER[(i + wave / GData.THEME_LEN) % GData.JOINT_ORDER.size()]
+			p["hand"][-1] = jk
 		p["picked"] = false
 		p["rerolls"] = 0
 		p["r_used"] = false
@@ -90,6 +94,15 @@ func _hand_for(seat: int, pool: Array, used: Dictionary, rng: RandomNumberGenera
 		hand.append(row[1])
 		used[row[1]] = int(used.get(row[1], 0)) + 1
 	return hand
+
+
+## 이번 테마에 합동 설비를 더 지을 수 있는지 (테마당 1개, 최대 5)
+func joint_room() -> bool:
+	var n := 0
+	for id in towers:
+		if GData.is_joint(str(towers[id]["type"])) and int(towers[id].get("theme", -1)) == theme():
+			n += 1
+	return n == 0
 
 
 func hand_size(seat: int) -> int:
@@ -275,8 +288,17 @@ func _make_plan() -> void:
 func tower_cells() -> Dictionary:
 	var out := {}
 	for id in towers:
-		out[Vector2i(int(towers[id]["x"]), int(towers[id]["y"]))] = id
+		for c in cells_of(towers[id]):
+			out[c] = id
 	return out
+
+
+## 포탑이 차지한 칸 (합동 설비는 2x2)
+static func cells_of(t: Dictionary) -> Array:
+	var at := Vector2i(int(t["x"]), int(t["y"]))
+	if GData.is_joint(str(t["type"])):
+		return [at, at + Vector2i(1, 0), at + Vector2i(0, 1), at + Vector2i(1, 1)]
+	return [at]
 
 
 ## 길을 막는 칸 (함정은 길 위에 있어도 된다)
@@ -285,7 +307,8 @@ func blockers() -> Dictionary:
 	for id in towers:
 		var t: Dictionary = towers[id]
 		if not is_trap(t):
-			out[Vector2i(int(t["x"]), int(t["y"]))] = id
+			for c in cells_of(t):
+				out[c] = id
 	return out
 
 
@@ -309,6 +332,11 @@ func apply(seat: int, c: Dictionary) -> String:
 		return _vote(seat, str(c.get("v", "")))
 	if op == "call":
 		return _call(seat, bool(c.get("v", true)))
+	if op == "chip":
+		var ec := _chip(seat, c)
+		if ec == "":
+			version += 1
+		return ec
 	if op == "role" or op == "give" or op == "invest":      # 전투 중에도
 		var e2 := _role_ability(seat, c) if op == "role" else (_give(seat, c) if op == "give" else _invest(seat, c))
 		if e2 == "":
@@ -432,6 +460,8 @@ func _build(seat: int, c: Dictionary) -> String:
 	if not (players[seat]["kit"] as Array).has(type):
 		return "공구함에 없는 포탑이에요"
 	var cell := Vector2i(int(c.get("x", -1)), int(c.get("y", -1)))
+	if GData.is_joint(type):
+		return _found_joint(seat, type, cell)
 	var trap: bool = GData.TOWERS[type]["lv"][0].get("trap", false)
 	var err := board.can_build(cell, tower_cells(), theme(), trap)
 	if err != "":
@@ -473,6 +503,23 @@ func _move(seat: int, c: Dictionary) -> String:
 
 ## 판매: 같은 준비 단계에 지은 포탑은 전액 환불 (실수 되돌리기)
 func _sell(seat: int, c: Dictionary) -> String:
+	var jid := int(c.get("id", -1))
+	if towers.has(jid) and GData.is_joint(str(towers[jid]["type"])):
+		var j: Dictionary = towers[jid]
+		var payers: Dictionary = j["paid"]
+		if not payers.has(seat):
+			return "기여한 사람만 판매에 동의할 수 있어요"
+		j["agree"][seat] = true
+		if (j["agree"] as Dictionary).size() < payers.size():
+			fx.append({"k": "joint_sell", "id": jid, "n": (j["agree"] as Dictionary).size(), "of": payers.size()})
+			return ""
+		var value := int(floor(joint_paid(j) * GData.SELL_RATE)) if bool(j.get("done", false)) else joint_paid(j)
+		var total := maxf(float(joint_paid(j)), 1.0)
+		for k in payers:
+			players[int(k)]["gold"] += int(floor(value * float(payers[k]) / total))
+		towers.erase(jid)
+		_relink()
+		return ""
 	var t := _mine(seat, c)
 	if t.is_empty():
 		return "내 포탑만 팔 수 있어요"
@@ -515,6 +562,99 @@ func next_up_cost(t: Dictionary) -> int:
 	if lv >= 3:
 		return 0
 	return int(GData.TOWERS[t["type"]]["up"][lv - 1])
+
+
+## 합동 설비 기초 (비계): 2x2 자리에 합계의 40% 를 내고 세운다
+func _found_joint(seat: int, type: String, cell: Vector2i) -> String:
+	if not joint_room():
+		return "이번 테마엔 합동 설비를 이미 지었어요"
+	var cells := tower_cells()
+	for c in [cell, cell + Vector2i(1, 0), cell + Vector2i(0, 1), cell + Vector2i(1, 1)]:
+		var err := board.can_build(c, cells, theme(), false)
+		if err != "":
+			return err
+	var total: int = GData.TOWERS[type]["cost"]
+	var pay := int(ceil(total * GData.JOINT_FOUND / 10.0)) * 10
+	var spend := invest_price(seat, pay)
+	if int(players[seat]["gold"]) < spend:
+		return "골드가 부족해요"
+	players[seat]["gold"] = int(players[seat]["gold"]) - spend
+	var id := _next_id
+	_next_id += 1
+	towers[id] = {"id": id, "owner": seat, "type": type, "x": cell.x, "y": cell.y, "lv": 1, "branch": "", "spent": pay,
+		"prio": "first", "cd": 0.0, "uses": 0, "heat": 0.0, "fresh": false, "inv": {}, "contrib": {}, "noinv": true, "auto_t": 0.0,
+		"paid": {seat: pay}, "done": false, "theme": theme(), "agree": {}}
+	players[seat]["inv"] = int(players[seat].get("inv", 0)) + pay
+	fx.append({"k": "joint", "id": id, "by": seat, "o": seat})
+	return ""
+
+
+## 합동 설비에 보태기: 합계의 25% 씩. 혼자서는 완성할 수 없다
+func _chip(seat: int, c: Dictionary) -> String:
+	var id := int(c.get("id", -1))
+	if not towers.has(id) or not GData.is_joint(str(towers[id]["type"])):
+		return "합동 설비를 골라 주세요"
+	var t: Dictionary = towers[id]
+	if bool(t.get("done", false)):
+		return "이미 완성됐어요"
+	var total: int = GData.TOWERS[t["type"]]["cost"]
+	var paid := joint_paid(t)
+	var left := total - paid
+	var pay := mini(maxi(int(floor(total * GData.JOINT_CHIP / 10.0)) * 10, 10), left)
+	var payers: Dictionary = t["paid"]
+	if pay == left and payers.size() == 1 and payers.has(seat):
+		return "다른 팀원이 함께 내야 완성돼요"
+	var spend := invest_price(seat, pay)
+	if int(players[seat]["gold"]) < spend:
+		return "골드가 부족해요"
+	players[seat]["gold"] = int(players[seat]["gold"]) - spend
+	payers[seat] = int(payers.get(seat, 0)) + pay
+	players[seat]["inv"] = int(players[seat].get("inv", 0)) + pay
+	t["spent"] = int(t["spent"]) + pay
+	if seat != int(t["owner"]):
+		t["contrib"][seat] = int((t["contrib"] as Dictionary).get(seat, 0)) + pay
+	if joint_paid(t) >= total and payers.size() >= 2:
+		t["done"] = true
+		_relink()
+		fx.append({"k": "joint_done", "id": id})
+	else:
+		fx.append({"k": "joint", "id": id, "by": seat, "o": int(t["owner"])})
+	return ""
+
+
+func joint_paid(t: Dictionary) -> int:
+	var n := 0
+	for k in t.get("paid", {}):
+		n += int(t["paid"][k])
+	return n
+
+
+## 중계탑: 기여한 사람들의 포탑 중 가장 센 3개와 연결
+func _relink() -> void:
+	for id in towers:
+		var r: Dictionary = towers[id]
+		if r["type"] != "relay" or not bool(r.get("done", false)):
+			continue
+		var payers: Dictionary = r["paid"]
+		var cand := []
+		for k in towers:
+			var t: Dictionary = towers[k]
+			if GData.is_joint(str(t["type"])) or is_trap(t) or not payers.has(int(t["owner"])):
+				continue
+			cand.append([int(t["lv"]) * 1000 + int(t["spent"]), k])
+		cand.sort_custom(func(a, b): return a[0] > b[0])
+		var links := []
+		for row in cand.slice(0, int(GData.tower_stats("relay", 1, "")["relay"])):
+			links.append(row[1])
+		r["links"] = links
+
+
+func linked(id: int) -> bool:
+	for k in towers:
+		var r: Dictionary = towers[k]
+		if r["type"] == "relay" and bool(r.get("done", false)) and (r.get("links", []) as Array).has(id):
+			return true
+	return false
 
 
 ## 투자: 팀원 포탑의 다음 강화비 25% 를 낸다 (주인 동의 없이, 막기 전까지)
@@ -572,6 +712,8 @@ func _upgrade(seat: int, c: Dictionary) -> String:
 	var t := _mine(seat, c)
 	if t.is_empty():
 		return "내 포탑만 강화할 수 있어요"
+	if GData.is_joint(str(t["type"])):
+		return "합동 설비는 강화하지 않아요"
 	var lv := int(t["lv"])
 	if lv >= 3:
 		return "이미 최고 단계예요"
@@ -958,6 +1100,7 @@ func _start_wave() -> void:
 		p["used"] = false
 		p["ab_left"] = 1
 		p["call"] = false
+	_relink()
 	for id in towers:
 		towers[id]["fresh"] = false
 		var tb := GData.tower_stats(towers[id]["type"], int(towers[id]["lv"]), str(towers[id]["branch"]))
@@ -1194,7 +1337,12 @@ func _fire(dt: float) -> void:
 		s["tid"] = int(t["id"])
 		if bool(s["trap"]):
 			continue
-		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
+		var joint := GData.is_joint(str(t["type"]))
+		if joint and not bool(t.get("done", false)):
+			continue
+		var at := Vector2(int(t["x"]), int(t["y"])) + (Vector2(1.0, 1.0) if joint else Vector2(0.5, 0.5))
+		if int(s["relay"]) > 0:
+			continue
 		var owner := int(t["owner"])
 		if bool(s["support"]):      # 신호탑·탐조등: 1초마다 주변 적에게 표식 (섬광은 4초마다 기절)
 			t["cd"] = 1.0
@@ -1214,7 +1362,7 @@ func _fire(dt: float) -> void:
 		var target := _pick(at, float(s["range"]), str(t["prio"]))
 		if target.is_empty():
 			continue
-		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at)) / (2.0 if float(t.get("over_t", 0.0)) > 0.0 else 1.0)
+		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at) + (GData.RELAY_HASTE if linked(int(t["id"])) else 0.0)) / (2.0 if float(t.get("over_t", 0.0)) > 0.0 else 1.0)
 		if role_of(owner) == "fire":
 			s["dmg"] = float(s["dmg"]) * (1.0 + GData.FIRE_DMG)
 		if bool(s["st_alt"]):      # 증기탑: 냉기·화상 번갈아 (혼자서 열충격)
@@ -1252,6 +1400,18 @@ func _fire(dt: float) -> void:
 					if float(s["pull"]) > 0.0:
 						en["dist"] = maxf(float(en["dist"]) - float(s["pull"]), 0.0)
 					_hurt(en, s, owner)
+			continue
+		if bool(s["rail"]):      # 레일건: 맵 끝까지 일직선 관통 (감전 적 x1.5)
+			var rdir := (hit_at - at).normalized()
+			var rtip := at + rdir * 60.0
+			fx.append({"k": "shot", "ty": "railgun", "x": at.x, "y": at.y, "tx": rtip.x, "ty2": rtip.y, "r": 0.0})
+			for en in enemies.duplicate():
+				var rel := _pos(en) - at
+				if enemies.has(en) and rel.dot(rdir) >= 0.0 and absf(rel.cross(rdir)) <= 0.5:
+					var rs := s.duplicate()
+					if (en["st"] as Dictionary).has("shock"):
+						rs["dmg"] = float(rs["dmg"]) * (1.0 + float(s["vs_shock"]))
+					_hurt(en, rs, owner)
 			continue
 		if bool(s["line"]):      # 사거리 끝까지 일직선 관통
 			var dir := (hit_at - at).normalized()
@@ -1373,6 +1533,8 @@ func tower_range(t: Dictionary) -> float:
 		r *= GData.SAND_RANGE
 	if not is_trap(t) and GData.is_high(Vector2i(int(t["x"]), int(t["y"]))):
 		r += GData.HIGH_RANGE
+	if t.has("id") and linked(int(t["id"])):
+		r += GData.RELAY_RANGE
 	return r
 
 
@@ -1479,7 +1641,9 @@ func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false, spread
 		en["stun"] = maxf(float(en.get("stun", 0.0)), float(s["stun"]) * (0.4 if GData.is_boss(en["type"]) else 1.0))
 	var st := str(s.get("st", ""))
 	if st != "" and not (st == "burn" and fireproof):
+		_rx_boost = GData.RELAY_RX if int(s.get("tid", -1)) >= 0 and linked(int(s["tid"])) else 0.0
 		_apply_status(en, st, owner, float(s.get("st_mul", 1.0)), float(s.get("mag", GData.MAG_ARMOR)))
+		_rx_boost = 0.0
 	var st2 := str(s.get("st2", ""))
 	if st2 != "" and enemies.has(en):
 		_apply_status(en, st2, owner)
@@ -1567,7 +1731,7 @@ func _react(rx: String, en: Dictionary, o1: int, o2: int) -> void:
 	var stt: Dictionary = en["st"]
 	var amp := stt.has("mark")
 	var mo := int(stt["mark"][1]) if amp else -1
-	var mul := 1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)
+	var mul := (1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)) * (1.0 + _rx_boost)
 	if amp:
 		mul *= 2.0
 	for o in [o1, o2]:
@@ -1735,7 +1899,8 @@ func to_data() -> Dictionary:
 		var t: Dictionary = towers[id]
 		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"],
 			int(t.get("uses", 0)), snappedf(float(t.get("heat", 0.0)), 0.1), bool(t.get("fresh", false)), _int_keys(t.get("inv", {})),
-			_int_keys(t.get("contrib", {})), bool(t.get("noinv", false))])
+			_int_keys(t.get("contrib", {})), bool(t.get("noinv", false)), _int_keys(t.get("paid", {})), bool(t.get("done", false)),
+			int(t.get("theme", -1)), t.get("links", []), _int_keys(t.get("agree", {}))])
 	var dr := {}
 	for s in drafts:
 		dr[str(s)] = drafts[s]
@@ -1792,6 +1957,8 @@ func load_data(d: Dictionary) -> void:
 			"lv": int(r[5]), "branch": str(r[6]), "spent": int(r[7]), "prio": str(r[8]), "cd": 0.0,
 			"uses": int(r[9]) if r.size() > 9 else 0, "heat": float(r[10]) if r.size() > 10 else 0.0, "fresh": bool(r[11]) if r.size() > 11 else false,
 			"inv": _from_wire(r[12]) if r.size() > 12 else {}, "contrib": _from_wire(r[13]) if r.size() > 13 else {}, "noinv": bool(r[14]) if r.size() > 14 else false,
+			"paid": _from_wire(r[15]) if r.size() > 15 else {}, "done": bool(r[16]) if r.size() > 16 else false, "theme": int(r[17]) if r.size() > 17 else -1,
+			"links": (r[18] as Array).map(func(v): return int(v)) if r.size() > 18 and r[18] is Array else [], "agree": _from_wire(r[19]) if r.size() > 19 else {},
 			"auto_t": 0.0}
 	drafts = {}
 	var dr: Dictionary = d.get("dr", {})

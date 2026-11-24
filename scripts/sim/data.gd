@@ -173,68 +173,125 @@ const PING_KINDS := {
 ## 값: dmg 피해, cd 간격, range 사거리, splash 폭발, slow 감속, aura 범위 전체, line 관통선, shred 방어 감소,
 ## oil 기름 시간, fire 불(기름 ×3), chain 연쇄 수, jump 튀는 거리, buff 주변 사거리, reveal 유령 실체화,
 ## mark 받는 피해 증가, trap 길 위 함정, uses 내구
+## st: 남기는 상태, st_mul: 상태 시간 배율, phys: 물리 피해(취성 +50%), every: n발마다 상태, vs_mag: 자성 적 추가 피해,
+## mag: 자성이 깎는 방어력, pull/push: 끌어당김·밀어냄(칸), puddle: 맞은 자리 길에 기름 웅덩이(초), haste: 주변 공격 속도, mark_r: 표식 범위
 const TOWERS := {
 	"gun": {
 		"name": "기관포탑", "role": "단일 연사", "cost": 100, "up": [80, 120], "art": 0,
-		"lv": [{"dmg": 5.0, "cd": 0.3, "range": 3.0}, {"dmg": 8.0, "cd": 0.3, "range": 3.0}],
-		"a": {"label": "회전 4연장", "dmg": 8.0, "cd": 0.15, "range": 3.0},
-		"b": {"label": "관통 장포신", "dmg": 18.0, "cd": 0.45, "range": 3.6, "pierce": 6.0, "line": true},
+		"lv": [{"dmg": 5.0, "cd": 0.3, "range": 3.0, "phys": true}, {"dmg": 8.0, "cd": 0.3, "range": 3.0, "phys": true}],
+		"a": {"label": "예광탄", "desc": "5발마다 표식", "dmg": 8.0, "cd": 0.25, "range": 3.0, "phys": true, "st": "mark", "every": 5},
+		"b": {"label": "철갑탄", "desc": "방어 무시 · 자성 +30%", "dmg": 16.0, "cd": 0.45, "range": 3.4, "phys": true, "pierce": 99.0, "vs_mag": 0.3},
 	},
 	"cannon": {
-		"name": "대포탑", "role": "범위 폭발", "cost": 150, "up": [120, 180], "art": 1,
-		"lv": [{"dmg": 16.0, "cd": 1.6, "range": 2.5, "splash": 1.0}, {"dmg": 24.0, "cd": 1.6, "range": 2.5, "splash": 1.0}],
-		"a": {"label": "폭발 범위 확대", "dmg": 24.0, "cd": 1.6, "range": 2.5, "splash": 1.6},
-		"b": {"label": "좁은 범위 고피해", "dmg": 52.0, "cd": 1.6, "range": 2.5, "splash": 1.0},
+		"name": "대포탑", "role": "범위 한 방", "cost": 150, "up": [120, 180], "art": 1,
+		"lv": [{"dmg": 16.0, "cd": 1.6, "range": 2.5, "splash": 1.0, "phys": true}, {"dmg": 24.0, "cd": 1.6, "range": 2.5, "splash": 1.0, "phys": true}],
+		"a": {"label": "소이탄", "desc": "폭발 자리 화상", "dmg": 24.0, "cd": 1.6, "range": 2.5, "splash": 1.2, "st": "burn", "fire": true},
+		"b": {"label": "고폭탄", "desc": "한 방 52 · 산산조각", "dmg": 52.0, "cd": 1.6, "range": 2.5, "splash": 1.0, "phys": true},
 	},
 	"cold": {
 		"name": "냉각탑", "role": "범위 감속", "cost": 120, "up": [100, 140], "art": 2,
-		"lv": [{"dmg": 1.0, "cd": 1.0, "range": 2.0, "slow": 0.3, "aura": true}, {"dmg": 2.0, "cd": 0.8, "range": 2.0, "slow": 0.3, "aura": true}],
-		"a": {"label": "냉기 장막", "dmg": 2.0, "cd": 0.8, "range": 3.0, "slow": 0.3, "aura": true},
-		"b": {"label": "얼음 송곳", "dmg": 6.0, "cd": 0.8, "range": 2.0, "slow": 0.55},
+		"lv": [{"dmg": 1.0, "cd": 1.0, "range": 2.0, "aura": true, "st": "cold"}, {"dmg": 2.0, "cd": 0.8, "range": 2.0, "aura": true, "st": "cold"}],
+		"a": {"label": "냉기 장막", "desc": "범위 3칸", "dmg": 2.0, "cd": 0.8, "range": 3.0, "aura": true, "st": "cold"},
+		"b": {"label": "얼음 송곳", "desc": "한 방 + 냉기 2배", "dmg": 42.0, "cd": 1.6, "range": 2.5, "phys": true, "st": "cold", "st_mul": 2.0},
 	},
 	"magnet": {
-		"name": "자석탑", "role": "방어력 감소", "cost": 140, "up": [110, 150], "art": 5,
-		"lv": [{"dmg": 2.0, "cd": 0.8, "range": 2.5, "shred": 0.4}, {"dmg": 3.0, "cd": 0.6, "range": 2.5, "shred": 0.5}],
-		"a": {"label": "자기장", "dmg": 2.0, "cd": 0.8, "range": 2.5, "shred": 0.4, "aura": true},
-		"b": {"label": "갑옷 분쇄", "dmg": 8.0, "cd": 0.6, "range": 2.5, "shred": 0.7},
+		"name": "자석탑", "role": "방어 깎기", "cost": 140, "up": [110, 150], "art": 5,
+		"lv": [{"dmg": 2.0, "cd": 0.8, "range": 2.5, "st": "mag"}, {"dmg": 3.0, "cd": 0.6, "range": 2.5, "st": "mag"}],
+		"a": {"label": "강자장", "desc": "범위 끌어당김", "dmg": 2.0, "cd": 0.8, "range": 2.5, "aura": true, "st": "mag", "pull": 0.15},
+		"b": {"label": "파쇄 자장", "desc": "자성 방어 -4", "dmg": 8.0, "cd": 0.6, "range": 2.5, "st": "mag", "mag": 4.0},
 	},
 	"oil": {
-		"name": "기름분사탑", "role": "기름 상태 부여", "cost": 110, "up": [90, 130], "art": 3,
-		"lv": [{"dmg": 1.0, "cd": 1.0, "range": 2.0, "splash": 0.8, "oil": 4.0}, {"dmg": 1.0, "cd": 0.8, "range": 2.0, "splash": 1.0, "oil": 6.0}],
-		"a": {"label": "점착 기름", "dmg": 1.0, "cd": 0.8, "range": 2.0, "splash": 1.0, "oil": 6.0, "slow": 0.25},
-		"b": {"label": "고압 분사", "dmg": 1.0, "cd": 0.6, "range": 2.6, "splash": 1.4, "oil": 6.0},
+		"name": "기름분사탑", "role": "상태 깔기", "cost": 110, "up": [90, 130], "art": 3,
+		"lv": [{"dmg": 1.0, "cd": 1.0, "range": 2.0, "splash": 0.8, "st": "oil"}, {"dmg": 1.0, "cd": 0.8, "range": 2.0, "splash": 1.0, "st": "oil"}],
+		"a": {"label": "기름 웅덩이", "desc": "길 2칸 6초", "dmg": 1.0, "cd": 0.8, "range": 2.0, "splash": 1.0, "st": "oil", "puddle": 6.0},
+		"b": {"label": "고압 분사", "desc": "사거리 3.5 · 밀어냄", "dmg": 1.0, "cd": 0.6, "range": 3.5, "splash": 1.4, "st": "oil", "push": 0.3},
 	},
 	"flame": {
-		"name": "불꽃탑", "role": "근거리 지속 피해", "cost": 130, "up": [100, 150], "art": 4,
-		"lv": [{"dmg": 3.0, "cd": 0.25, "range": 1.5, "aura": true, "fire": true}, {"dmg": 4.5, "cd": 0.25, "range": 1.5, "aura": true, "fire": true}],
-		"a": {"label": "화염 확산", "dmg": 4.5, "cd": 0.25, "range": 2.2, "aura": true, "fire": true},
-		"b": {"label": "고열 노즐", "dmg": 8.0, "cd": 0.25, "range": 1.5, "aura": true, "fire": true},
+		"name": "불꽃탑", "role": "근거리 지속", "cost": 130, "up": [100, 150], "art": 4,
+		"lv": [{"dmg": 3.0, "cd": 0.25, "range": 1.5, "aura": true, "fire": true, "st": "burn"}, {"dmg": 4.5, "cd": 0.25, "range": 1.5, "aura": true, "fire": true, "st": "burn"}],
+		"a": {"label": "화염 방사", "desc": "줄기 3칸", "dmg": 5.0, "cd": 0.25, "range": 3.0, "line": true, "fire": true, "st": "burn"},
+		"b": {"label": "소각로", "desc": "화상 2배 시간", "dmg": 6.0, "cd": 0.25, "range": 1.5, "aura": true, "fire": true, "st": "burn", "st_mul": 2.0},
 	},
 	"shock": {
-		"name": "전기탑", "role": "연쇄 번개", "cost": 160, "up": [130, 170], "art": 6,
-		"lv": [{"dmg": 10.0, "cd": 1.2, "range": 2.5, "chain": 4, "jump": 1.5}, {"dmg": 14.0, "cd": 1.2, "range": 2.5, "chain": 4, "jump": 1.5}],
-		"a": {"label": "연쇄 증폭", "dmg": 14.0, "cd": 1.2, "range": 2.5, "chain": 6, "jump": 1.8},
-		"b": {"label": "고압 방전", "dmg": 24.0, "cd": 1.2, "range": 2.5, "chain": 3, "jump": 1.5},
+		"name": "전기탑", "role": "연쇄", "cost": 160, "up": [130, 170], "art": 6,
+		"lv": [{"dmg": 10.0, "cd": 1.2, "range": 2.5, "chain": 4, "jump": 1.5, "st": "shock"}, {"dmg": 14.0, "cd": 1.2, "range": 2.5, "chain": 4, "jump": 1.5, "st": "shock"}],
+		"a": {"label": "콘덴서", "desc": "4초 모아 한 방 60", "dmg": 60.0, "cd": 4.0, "range": 2.8, "st": "shock"},
+		"b": {"label": "전기 울타리", "desc": "길 감전 장판", "dmg": 8.0, "cd": 1.0, "range": 2.5, "splash": 1.0, "st": "shock"},
 	},
 	"sniper": {
-		"name": "저격탑", "role": "아주 먼 단발", "cost": 170, "up": [140, 180], "art": 7,
-		"lv": [{"dmg": 60.0, "cd": 2.5, "range": 6.0}, {"dmg": 85.0, "cd": 2.5, "range": 6.0}],
-		"a": {"label": "대구경", "dmg": 150.0, "cd": 3.0, "range": 6.5, "pierce": 6.0},
-		"b": {"label": "속사 조준경", "dmg": 70.0, "cd": 1.4, "range": 6.0},
+		"name": "저격탑", "role": "아주 먼 한 방", "cost": 170, "up": [140, 180], "art": 7,
+		"lv": [{"dmg": 60.0, "cd": 2.5, "range": 6.0, "phys": true}, {"dmg": 85.0, "cd": 2.5, "range": 6.0, "phys": true}],
+		"a": {"label": "표식탄", "desc": "맞은 적 표식", "dmg": 85.0, "cd": 2.2, "range": 6.5, "phys": true, "st": "mark"},
+		"b": {"label": "열선탄", "desc": "한 방 + 화상", "dmg": 85.0, "cd": 2.2, "range": 6.0, "fire": true, "st": "burn"},
 	},
 	"signal": {
 		"name": "신호탑", "role": "보조", "cost": 120, "up": [100, 130], "art": 8,
-		"lv": [{"range": 2.0, "buff": 0.15, "reveal": true, "support": true}, {"range": 2.0, "buff": 0.2, "reveal": true, "support": true}],
-		"a": {"label": "증폭 안테나", "range": 3.0, "buff": 0.25, "reveal": true, "support": true},
-		"b": {"label": "표적 지정", "range": 2.0, "buff": 0.2, "reveal": true, "support": true, "mark": 0.15},
+		"lv": [{"range": 2.0, "buff": 0.15, "reveal": true, "support": true, "st": "mark", "mark_r": 1.5}, {"range": 2.0, "buff": 0.2, "reveal": true, "support": true, "st": "mark", "mark_r": 1.5}],
+		"a": {"label": "지휘소", "desc": "주변 공격 속도 +15%", "range": 2.5, "buff": 0.2, "reveal": true, "support": true, "st": "mark", "mark_r": 1.5, "haste": 0.15},
+		"b": {"label": "조준 레이저", "desc": "표식 범위 2칸", "range": 2.0, "buff": 0.2, "reveal": true, "support": true, "st": "mark", "mark_r": 2.5},
 	},
 	"spike": {
 		"name": "가시 덫개", "role": "길 위 함정", "cost": 60, "up": [50, 80], "art": 9,
-		"lv": [{"dmg": 20.0, "range": 0.5, "trap": true, "uses": 30}, {"dmg": 30.0, "range": 0.5, "trap": true, "uses": 40}],
-		"a": {"label": "점착 장판", "dmg": 10.0, "range": 0.5, "trap": true, "uses": 60, "slow": 0.4},
-		"b": {"label": "대형 가시", "dmg": 50.0, "range": 0.5, "trap": true, "uses": 40},
+		"lv": [{"dmg": 20.0, "range": 0.5, "trap": true, "uses": 30, "phys": true}, {"dmg": 30.0, "range": 0.5, "trap": true, "uses": 40, "phys": true}],
+		"a": {"label": "지뢰", "desc": "터지며 화상", "dmg": 60.0, "range": 0.5, "trap": true, "uses": 3, "splash": 1.0, "fire": true, "st": "burn"},
+		"b": {"label": "끈끈이", "desc": "기름 + 감속", "dmg": 10.0, "range": 0.5, "trap": true, "uses": 60, "slow": 0.4, "st": "oil"},
 	},
 }
+
+# ── 상태와 반응 ──
+## 상태: 한 적에 같은 상태는 겹치지 않고 시간만 새로. 두 상태가 만나면 반응.
+const STATUS := {
+	"oil": {"name": "기름", "col": "#5A3E28", "t": 4.0},
+	"burn": {"name": "화상", "col": "#F07A2A", "t": 3.0},
+	"cold": {"name": "냉기", "col": "#8FD3F0", "t": 2.0},
+	"shock": {"name": "감전", "col": "#F2D640", "t": 3.0},
+	"mag": {"name": "자성", "col": "#A070E0", "t": 4.0},
+	"mark": {"name": "표식", "col": "#F4F1E8", "t": 5.0},
+}
+const STATUS_ORDER := ["oil", "burn", "cold", "shock", "mag", "mark"]
+const BURN_DPS := 4.0
+const OIL_SLOW := 0.1
+const COLD_SLOW := 0.3
+const MAG_ARMOR := 2.0
+const MARK_TAKEN := 0.1
+const CROSS_BONUS := 0.25      # 다른 사람 포탑끼리 만든 반응 피해
+const RX_COOLDOWN := 1.0
+## 반응: a+b 두 상태 (자성·표식은 반응 뒤에도 남는다). shatter·slip·amp 는 특별 조건.
+const REACTIONS := {
+	"ignite": {"name": "인화", "a": "oil", "b": "burn", "col": "#F08A3A", "desc": "반지름 1칸 폭발 30"},
+	"harden": {"name": "굳음", "a": "oil", "b": "cold", "col": "#9CC8DC", "desc": "1.5초 멈춤 (보스 0.4초)"},
+	"short": {"name": "합선", "a": "oil", "b": "shock", "col": "#E8D04A", "desc": "2칸 안 기름 묻은 적 모두 20"},
+	"thermal": {"name": "열충격", "a": "cold", "b": "burn", "col": "#E8A0A0", "desc": "방어 영구 -1 (최대 -3), 15"},
+	"super": {"name": "초전도", "a": "cold", "b": "shock", "col": "#A8E8F8", "desc": "주변 3명에게 줄지 않는 번개"},
+	"brittle": {"name": "취성", "a": "cold", "b": "mag", "col": "#C8B8F0", "desc": "4초 물리 피해 +50%"},
+	"emag": {"name": "전자석", "a": "mag", "b": "shock", "col": "#B890F0", "desc": "1.5칸 적을 끌어모음"},
+	"melt": {"name": "가열 장갑", "a": "mag", "b": "burn", "col": "#E07060", "desc": "3초 방어력 0"},
+	"overheat": {"name": "과열", "a": "shock", "b": "burn", "col": "#F8B030", "desc": "주변 1칸 25, 화상 퍼짐"},
+	"shatter": {"name": "산산조각", "a": "cold", "b": "", "col": "#E0F4FF", "desc": "냉기 + 한 방 40 이상 = ×1.5"},
+	"slip": {"name": "미끄럼", "a": "oil", "b": "", "col": "#C0A070", "desc": "기름 + 덫 = 덫 피해 ×2, 넘어짐"},
+	"amp": {"name": "증폭", "a": "mark", "b": "", "col": "#FFFFFF", "desc": "표식 + 반응 = 반응 피해 ×2"},
+}
+const REACTION_ORDER := ["ignite", "harden", "short", "thermal", "super", "brittle", "emag", "melt", "overheat", "shatter", "slip", "amp"]
+
+
+static func reaction_of(a: String, b: String) -> String:
+	for k in REACTION_ORDER:
+		var r: Dictionary = REACTIONS[k]
+		if r["b"] != "" and ((r["a"] == a and r["b"] == b) or (r["a"] == b and r["b"] == a)):
+			return k
+	return ""
+
+
+## 그 상태로 터뜨릴 수 있는 반응들
+static func reactions_with(st: String) -> Array:
+	var out := []
+	for k in REACTION_ORDER:
+		var r: Dictionary = REACTIONS[k]
+		if r["a"] == st or r["b"] == st:
+			out.append(k)
+	return out
+
+
 const TOWER_ORDER := ["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"]
 const DEFAULT_KIT := ["gun", "cannon", "cold", "magnet", "spike"]
 const TRAP_REPAIR := 1        # 가시 덫개 수리에 드는 공사 자재
@@ -393,7 +450,10 @@ static func tower_stats(type: String, level: int, branch: String) -> Dictionary:
 		"oil": float(s.get("oil", 0.0)), "fire": bool(s.get("fire", false)), "chain": int(s.get("chain", 0)),
 		"jump": float(s.get("jump", 0.0)), "buff": float(s.get("buff", 0.0)), "reveal": bool(s.get("reveal", false)),
 		"mark": float(s.get("mark", 0.0)), "trap": bool(s.get("trap", false)), "uses": int(s.get("uses", 0)),
-		"support": bool(s.get("support", false)),
+		"support": bool(s.get("support", false)), "st": str(s.get("st", "")), "st_mul": float(s.get("st_mul", 1.0)),
+		"phys": bool(s.get("phys", false)), "every": int(s.get("every", 0)), "vs_mag": float(s.get("vs_mag", 0.0)),
+		"mag": float(s.get("mag", MAG_ARMOR)), "pull": float(s.get("pull", 0.0)), "push": float(s.get("push", 0.0)),
+		"puddle": float(s.get("puddle", 0.0)), "haste": float(s.get("haste", 0.0)), "mark_r": float(s.get("mark_r", 0.0)),
 	}
 
 

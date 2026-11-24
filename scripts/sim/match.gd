@@ -23,6 +23,10 @@ var gate_dmg: Array = [0, 0] # 입구별 성 피해
 var leaks: Dictionary = {}   # 성에 도착한 적 종류별 수
 var speed := 1               # 전투 배속 (2배는 접속 중인 전원 동의)
 var ice_t: Dictionary = {}   # 보스가 남긴 빙판 칸 -> 남은 시간
+var rx_log: Dictionary = {}     # 반응 이름 -> 이번 판 횟수
+var seen_rx: Array = []         # 이번 판에 처음 나온 순서대로 (반응 도감)
+var joint_dmg := 0.0            # 다른 사람 포탑끼리 만든 반응 피해
+var puddle_t: Dictionary = {}   # 기름 웅덩이 칸 -> [남은 시간, 주인]
 var hp_log: Array = []       # 웨이브마다 끝났을 때 본부 내구도 (결과 화면)
 var tower_log: Dictionary = {}  # 포탑 id -> [종류, 단계, 갈래, 주인, 피해, 처치] (결과 화면의 가장 일 많이 한 포탑)
 var undo_flags: Array = []   # 손님 사본: 자리별 되돌리기 가능 여부
@@ -50,7 +54,7 @@ func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
 		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kit_ok(kits[i]) else GData.DEFAULT_KIT.duplicate()
 		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
 			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
-			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0})
+			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0})
 	_make_plan()
 
 
@@ -641,7 +645,8 @@ func _spawn(type: String, e: int, dist := 0.0, hp_ratio := 1.0) -> Dictionary:
 	var d: Dictionary = GData.ENEMIES[type]
 	var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size())
 	var en := {"id": _next_id, "type": type, "e": e, "dist": dist, "hp": max_hp * hp_ratio, "max": max_hp * hp_ratio,
-		"slow": 0.0, "slow_t": 0.0, "shred": 0.0, "shred_t": 0.0, "oil": 0.0, "sh": 0.0, "cell": -1, "sk": 0.0, "done": []}
+		"slow": 0.0, "slow_t": 0.0, "sh": 0.0, "cell": -1, "sk": 0.0, "done": [], "st": {}, "rx_t": 0.0, "stun": 0.0,
+		"arm_dn": 0.0, "brit_t": 0.0, "melt_t": 0.0}
 	_next_id += 1
 	enemies.append(en)
 	return en
@@ -659,6 +664,10 @@ func step(dt := GData.TICK) -> void:
 		ice_t[k] = float(ice_t[k]) - dt
 		if float(ice_t[k]) <= 0.0:
 			ice_t.erase(k)
+	for k in puddle_t.keys():
+		puddle_t[k][0] = float(puddle_t[k][0]) - dt
+		if float(puddle_t[k][0]) <= 0.0:
+			puddle_t.erase(k)
 	_move_enemies(dt)
 	if phase == "over":
 		return
@@ -680,13 +689,13 @@ func _move_enemies(dt: float) -> void:
 	for en in enemies.duplicate():
 		if not enemies.has(en):
 			continue
-		for k in ["slow", "shred"]:
-			var tk: String = k + "_t"
-			if float(en[tk]) > 0.0:
-				en[tk] = float(en[tk]) - dt
-				if float(en[tk]) <= 0.0:
-					en[k] = 0.0
-		en["oil"] = maxf(float(en["oil"]) - dt, 0.0)
+		if float(en["slow_t"]) > 0.0:
+			en["slow_t"] = float(en["slow_t"]) - dt
+			if float(en["slow_t"]) <= 0.0:
+				en["slow"] = 0.0
+		_tick_status(en, dt)
+		if not enemies.has(en):
+			continue
 		var d: Dictionary = GData.ENEMIES[en["type"]]
 		var path: Array = board.paths[en["e"]]
 		var ci := clampi(int(float(en["dist"]) + 0.5), 0, path.size() - 1)
@@ -694,8 +703,9 @@ func _move_enemies(dt: float) -> void:
 		var boost := 1.0
 		if on_ice(cell):
 			boost = float(d.get("ice", GData.ICE_SPEED))
-		var slow := float(en["slow"]) * (1.0 - float(d.get("slow_res", 0.0)))
-		en["dist"] += float(d["speed"]) * GData.SPEED_MUL * boost * (1.0 - slow) * dt
+		var slow := move_slow(en)
+		if float(en.get("stun", 0.0)) <= 0.0:
+			en["dist"] += float(d["speed"]) * GData.SPEED_MUL * boost * (1.0 - slow) * dt
 		if on_lava(cell) and not bool(d.get("fireproof", false)):
 			en["hp"] = float(en["hp"]) - float(en["max"]) * GData.LAVA_RATE * dt
 			if float(en["hp"]) <= 0.0:
@@ -705,6 +715,8 @@ func _move_enemies(dt: float) -> void:
 			en["cell"] = ci
 			if float(d.get("trail", 0.0)) > 0.0:
 				ice_t[cell] = float(d["trail"])
+			if puddle_t.has(cell) and not (en["st"] as Dictionary).has("oil"):
+				_apply_status(en, "oil", int(puddle_t[cell][1]))
 			_trap(en, cell)
 			if not enemies.has(en):
 				continue
@@ -734,7 +746,19 @@ func _trap(en: Dictionary, cell: Vector2i) -> void:
 		if int(t["uses"]) <= 0:
 			version += 1
 		fx.append({"k": "shot", "ty": t["type"], "x": cell.x + 0.5, "y": cell.y + 0.5, "tx": cell.x + 0.5, "ty2": cell.y + 0.5, "r": 0.5})
-		_hurt(en, s, int(t["owner"]), true)
+		var stt: Dictionary = en["st"]
+		if stt.has("oil"):      # 미끄럼: 기름 + 덫 = 덫 피해 2배, 넘어짐
+			var oo := int(stt["oil"][1])
+			stt.erase("oil")
+			s["dmg"] = float(s["dmg"]) * 2.0
+			en["stun"] = maxf(float(en["stun"]), 0.5)
+			_rx_event("slip", en, oo, int(t["owner"]))
+		if float(s["splash"]) > 0.0:
+			for e2 in enemies.duplicate():
+				if enemies.has(e2) and _pos(e2).distance_to(Vector2(cell) + Vector2(0.5, 0.5)) <= float(s["splash"]):
+					_hurt(e2, s, int(t["owner"]), true)
+		else:
+			_hurt(en, s, int(t["owner"]), true)
 		return
 
 
@@ -803,20 +827,40 @@ func _fire(dt: float) -> void:
 			continue
 		var s := GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))
 		s["tid"] = int(t["id"])
-		if bool(s["support"]) or bool(s["trap"]):
+		if bool(s["trap"]):
+			continue
+		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
+		var owner := int(t["owner"])
+		if bool(s["support"]):      # 신호탑: 1초마다 주변 적에게 표식
+			t["cd"] = 1.0
+			for en in enemies:
+				if _pos(en).distance_to(at) <= float(s["mark_r"]):
+					_apply_status(en, "mark", owner)
 			continue
 		s["range"] = tower_range(t)
-		var at := Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)
 		var target := _pick(at, float(s["range"]), str(t["prio"]))
 		if target.is_empty():
 			continue
-		t["cd"] = float(s["cd"])
+		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at))
+		if int(s["every"]) > 0:
+			t["shots"] = int(t.get("shots", 0)) + 1
+			if int(t["shots"]) % int(s["every"]) != 0:
+				s["st"] = ""
 		var hit_at := _pos(target)
-		var owner := int(t["owner"])
+		if float(s["push"]) > 0.0:
+			target["dist"] = maxf(float(target["dist"]) - float(s["push"]), 0.0)
+		if float(s["puddle"]) > 0.0:
+			var lane: Array = board.paths[int(target["e"])]
+			var ci := clampi(int(float(target["dist"]) + 0.5), 0, lane.size() - 1)
+			for k in [ci, mini(ci + 1, lane.size() - 1)]:
+				puddle_t[lane[k]] = [float(s["puddle"]), owner]
+				fx.append({"k": "puddle", "x": float(lane[k].x) + 0.5, "y": float(lane[k].y) + 0.5, "t": float(s["puddle"])})
 		if bool(s["aura"]):      # 범위 안 전부
 			fx.append({"k": "shot", "ty": t["type"], "x": at.x, "y": at.y, "tx": at.x, "ty2": at.y, "r": s["range"]})
 			for en in enemies.duplicate():
 				if enemies.has(en) and _pos(en).distance_to(at) <= float(s["range"]):
+					if float(s["pull"]) > 0.0:
+						en["dist"] = maxf(float(en["dist"]) - float(s["pull"]), 0.0)
 					_hurt(en, s, owner)
 			continue
 		if bool(s["line"]):      # 사거리 끝까지 일직선 관통
@@ -899,6 +943,16 @@ func _signals() -> Array:
 	return out
 
 
+## 지휘소(신호탑 A) 근처 포탑 공격 속도
+func _haste_at(at: Vector2) -> float:
+	var h := 0.0
+	for sg in _signals():
+		var ss := GData.tower_stats("signal", int(sg["lv"]), str(sg["branch"]))
+		if float(ss["haste"]) > 0.0 and (Vector2(int(sg["x"]), int(sg["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]) + 0.01:
+			h = maxf(h, float(ss["haste"]))
+	return h
+
+
 ## 환경·신호탑까지 반영한 사거리
 func tower_range(t: Dictionary) -> float:
 	var r: float = GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["range"]
@@ -926,12 +980,7 @@ func _revealed(at: Vector2) -> bool:
 
 
 func _marked(at: Vector2) -> float:
-	var m := 0.0
-	for sg in _signals():
-		var ss := GData.tower_stats("signal", int(sg["lv"]), str(sg["branch"]))
-		if float(ss["mark"]) > 0.0 and (Vector2(int(sg["x"]), int(sg["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= float(ss["range"]):
-			m = maxf(m, float(ss["mark"]))
-	return m
+	return 0.0
 
 
 ## 조준할 수 없는 상태: 유령병(신호탑 근처면 실체화), 땅속의 굴착 벌레
@@ -954,26 +1003,36 @@ func is_ghost(en: Dictionary) -> bool:
 	return is_hidden(en)
 
 
-func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false) -> void:
+func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false, spread := true) -> void:
 	if not from_trap and is_hidden(en):
 		return
+	if not enemies.has(en):
+		return
 	var d: Dictionary = GData.ENEMIES[en["type"]]
-	if float(s.get("oil", 0.0)) > 0.0:
-		en["oil"] = maxf(float(en["oil"]), float(s["oil"]))
-	if float(s.get("shred", 0.0)) > 0.0:      # 자석탑: 방어력을 잠시 깎는다 (겹치면 큰 쪽)
-		en["shred"] = maxf(float(en.get("shred", 0.0)), float(s["shred"]))
-		en["shred_t"] = 3.0
-	var raw := float(s["dmg"])
-	if bool(s.get("fire", false)):
-		if bool(d.get("fireproof", false)):
-			raw = 0.0
-		elif float(en["oil"]) > 0.0:
-			raw *= 3.0
-	if int(s.get("chain", 0)) > 0 and float(en["slow"]) > 0.0:
-		raw *= 2.0
-	raw *= 1.0 + _marked(_pos(en))
-	var base_armor: float = float(d["armor"]) * (1.0 - float(en.get("shred", 0.0)))
-	var armor: float = maxf(base_armor - float(s["pierce"]), 0.0)
+	var stt: Dictionary = en["st"]
+	var fireproof := bool(d.get("fireproof", false))
+	var raw := float(s.get("dmg", 0.0))
+	if bool(s.get("fire", false)) and fireproof:
+		raw = 0.0
+	if stt.has("mark"):
+		raw *= 1.0 + GData.MARK_TAKEN
+	if bool(s.get("phys", false)) and float(en.get("brit_t", 0.0)) > 0.0:      # 취성
+		raw *= 1.5
+	if stt.has("mag") and float(s.get("vs_mag", 0.0)) > 0.0:
+		raw *= 1.0 + float(s["vs_mag"])
+	if stt.has("cold") and float(s.get("dmg", 0.0)) >= 40.0 and not bool(s.get("aura", false)) and raw > 0.0:      # 산산조각
+		var co := int(stt["cold"][1])
+		stt.erase("cold")
+		raw *= 1.5
+		if stt.has("mark"):
+			raw *= 2.0
+		_rx_event("shatter", en, co, owner, stt.has("mark"), int(stt["mark"][1]) if stt.has("mark") else -1)
+	var base_armor: float = float(d["armor"]) - float(en.get("arm_dn", 0.0))
+	if stt.has("mag"):
+		base_armor -= float(stt["mag"][2])
+	if float(en.get("melt_t", 0.0)) > 0.0:      # 가열 장갑
+		base_armor = 0.0
+	var armor: float = maxf(maxf(base_armor, 0.0) - float(s.get("pierce", 0.0)), 0.0)
 	var dmg: float = maxf(raw - armor, raw * 0.25) if raw > 0.0 else 0.0
 	if float(en["sh"]) > 0.0 and dmg > 0.0:      # 수송차 보호막이 먼저 막는다
 		var absorbed := minf(float(en["sh"]), dmg)
@@ -986,10 +1045,181 @@ func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false) -> voi
 	if dmg >= 12.0:
 		var at := _pos(en)
 		fx.append({"k": "num", "x": at.x, "y": at.y, "n": roundi(dmg)})
-	if float(s["slow"]) > 0.0:
+	if float(s.get("slow", 0.0)) > 0.0:
 		_chill(en, float(s["slow"]), 1.4, owner)
+	if spread and stt.has("shock") and dmg > 0.0 and str(s.get("st", "")) != "shock":      # 감전: 옆 적 1명에게 50%
+		var so := int(stt["shock"][1])
+		stt.erase("shock")
+		var near := {}
+		var best := 1.5
+		for e2 in enemies:
+			if e2 == en:
+				continue
+			var dd := _pos(e2).distance_to(_pos(en))
+			if dd <= best:
+				best = dd
+				near = e2
+		if not near.is_empty():
+			var at2 := _pos(en)
+			var to := _pos(near)
+			fx.append({"k": "shot", "ty": "shock", "x": at2.x, "y": at2.y, "tx": to.x, "ty2": to.y, "r": 0.0})
+			_hurt(near, {"dmg": dmg * 0.5}, so, true, false)
 	if float(en["hp"]) <= 0.0:
 		_die(en, owner)
+		return
+	var st := str(s.get("st", ""))
+	if st != "" and not (st == "burn" and fireproof):
+		_apply_status(en, st, owner, float(s.get("st_mul", 1.0)), float(s.get("mag", GData.MAG_ARMOR)))
+
+
+## 상태 붙이기: 다른 상태와 만나면 반응 (같은 적에 1초에 한 번)
+func _apply_status(en: Dictionary, st: String, owner: int, mul := 1.0, extra := GData.MAG_ARMOR) -> void:
+	if not enemies.has(en):
+		return
+	var stt: Dictionary = en["st"]
+	var dur: float = float(GData.STATUS[st]["t"]) * mul
+	if float(en.get("rx_t", 0.0)) <= 0.0:
+		for p in GData.STATUS_ORDER:
+			if p == st or not stt.has(p):
+				continue
+			var rx := GData.reaction_of(p, st)
+			if rx == "":
+				continue
+			var po := int(stt[p][1])
+			if p != "mag" and p != "mark":
+				stt.erase(p)
+			if st == "mag" or st == "mark":
+				stt[st] = [dur, owner, extra]
+			en["rx_t"] = GData.RX_COOLDOWN
+			_react(rx, en, po, owner)
+			return
+	stt[st] = [maxf(dur, float(stt[st][0]) if stt.has(st) else 0.0), owner, extra]
+	if st == "cold":
+		players[owner]["slow"] += 0.2
+
+
+func _tick_status(en: Dictionary, dt: float) -> void:
+	var stt: Dictionary = en["st"]
+	for k in ["rx_t", "stun", "brit_t", "melt_t"]:
+		if float(en.get(k, 0.0)) > 0.0:
+			en[k] = float(en[k]) - dt
+	for k in stt.keys():
+		stt[k][0] = float(stt[k][0]) - dt
+		if k == "burn" and not bool(GData.ENEMIES[en["type"]].get("fireproof", false)):
+			_dot(en, GData.BURN_DPS * dt, int(stt[k][1]))
+			if not enemies.has(en):
+				return
+		if float(stt[k][0]) <= 0.0:
+			stt.erase(k)
+
+
+## 이동 감속 합 (상한 60%, 감속 저항 반영)
+func move_slow(en: Dictionary) -> float:
+	var stt: Dictionary = en.get("st", {})
+	var v := float(en["slow"])
+	if stt.has("cold"):
+		v += GData.COLD_SLOW
+	if stt.has("oil"):
+		v += GData.OIL_SLOW
+	v = minf(v, GData.SLOW_CAP)
+	return v * (1.0 - float(GData.ENEMIES[en["type"]].get("slow_res", 0.0)))
+
+
+## 방어 무시 피해 (화상·반응). 주인 여럿이면 나눠 기록
+func _dot(en: Dictionary, amount: float, owner: int) -> void:
+	_true_dmg(en, amount, [owner])
+
+
+func _true_dmg(en: Dictionary, amount: float, owners: Array) -> void:
+	if not enemies.has(en) or amount <= 0.0:
+		return
+	var dmg := minf(amount, float(en["hp"]))
+	en["hp"] = float(en["hp"]) - dmg
+	var uniq := []
+	for o in owners:
+		if int(o) >= 0 and not uniq.has(int(o)):
+			uniq.append(int(o))
+	for o in uniq:
+		players[o]["dmg"] += dmg / uniq.size()
+	if uniq.size() > 1:
+		joint_dmg += dmg
+	if dmg >= 12.0:
+		var at := _pos(en)
+		fx.append({"k": "num", "x": at.x, "y": at.y, "n": roundi(dmg)})
+	if float(en["hp"]) <= 0.0:
+		_die(en, uniq[-1] if not uniq.is_empty() else -1)
+
+
+func _react(rx: String, en: Dictionary, o1: int, o2: int) -> void:
+	var stt: Dictionary = en["st"]
+	var amp := stt.has("mark")
+	var mo := int(stt["mark"][1]) if amp else -1
+	var mul := 1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)
+	if amp:
+		mul *= 2.0
+	var owners := [o1, o2]
+	if amp:
+		owners.append(mo)
+	_rx_event(rx, en, o1, o2, amp, mo)
+	var at := _pos(en)
+	var boss: bool = GData.is_boss(en["type"])
+	match rx:
+		"ignite":
+			fx.append({"k": "boom", "x": at.x, "y": at.y, "r": 1.0})
+			for e2 in enemies.duplicate():
+				if _pos(e2).distance_to(at) <= 1.0:
+					_true_dmg(e2, 30.0 * mul, owners)
+		"harden":
+			en["stun"] = 0.4 if boss else 1.5
+		"short":
+			for e2 in enemies.duplicate():
+				if e2 == en or ((e2["st"] as Dictionary).has("oil") and _pos(e2).distance_to(at) <= 2.0):
+					var to := _pos(e2)
+					fx.append({"k": "shot", "ty": "shock", "x": at.x, "y": at.y, "tx": to.x, "ty2": to.y, "r": 0.0})
+					_true_dmg(e2, 20.0 * mul, owners)
+		"thermal":
+			en["arm_dn"] = minf(float(en.get("arm_dn", 0.0)) + 1.0, 3.0)
+			_true_dmg(en, 15.0 * mul, owners)
+		"super":
+			var near := enemies.filter(func(e2): return e2 != en and _pos(e2).distance_to(at) <= 2.5)
+			near.sort_custom(func(a, b): return _pos(a).distance_to(at) < _pos(b).distance_to(at))
+			_true_dmg(en, 14.0 * mul, owners)
+			for e2 in near.slice(0, 3):
+				var to := _pos(e2)
+				fx.append({"k": "shot", "ty": "shock", "x": at.x, "y": at.y, "tx": to.x, "ty2": to.y, "r": 0.0})
+				_true_dmg(e2, 14.0 * mul, owners)
+		"brittle":
+			en["brit_t"] = 4.0
+		"emag":
+			for e2 in enemies:
+				if e2 != en and int(e2["e"]) == int(en["e"]) and _pos(e2).distance_to(at) <= 1.5:
+					e2["dist"] = lerpf(float(e2["dist"]), float(en["dist"]), 0.6)
+		"melt":
+			en["melt_t"] = 3.0
+		"overheat":
+			fx.append({"k": "boom", "x": at.x, "y": at.y, "r": 1.0})
+			for e2 in enemies.duplicate():
+				if _pos(e2).distance_to(at) <= 1.0:
+					if e2 != en and not bool(GData.ENEMIES[e2["type"]].get("fireproof", false)):
+						(e2["st"] as Dictionary)["burn"] = [float(GData.STATUS["burn"]["t"]), o2, 0.0]
+					_true_dmg(e2, 25.0 * mul, owners)
+
+
+## 반응 기록·표시 (처음 나온 반응은 알림과 도감)
+func _rx_event(rx: String, en: Dictionary, o1: int, o2: int, amp := false, mo := -1) -> void:
+	var at := _pos(en)
+	for k in ([rx, "amp"] if amp else [rx]):
+		rx_log[k] = int(rx_log.get(k, 0)) + 1
+		if not seen_rx.has(k):
+			seen_rx.append(k)
+			fx.append({"k": "newrx", "n": k})
+	var uniq := []
+	for o in [o1, o2, mo]:
+		if int(o) >= 0 and int(o) < players.size() and not uniq.has(int(o)):
+			uniq.append(int(o))
+	for o in uniq:
+		players[o]["rx"] = int(players[o].get("rx", 0)) + 1
+	fx.append({"k": "rx", "n": rx, "x": at.x, "y": at.y, "o": [o1, o2], "amp": amp})
 
 
 func _die(en: Dictionary, owner: int) -> void:
@@ -1013,6 +1243,8 @@ func _die(en: Dictionary, owner: int) -> void:
 
 
 func _chill(en: Dictionary, amount: float, dur: float, owner: int) -> void:
+	if owner < 0:
+		owner = 0
 	var v := minf(maxf(float(en["slow"]), amount), GData.SLOW_CAP)   # 겹쳐도 상한까지만
 	en["slow"] = v
 	en["slow_t"] = maxf(float(en["slow_t"]), dur)
@@ -1092,7 +1324,7 @@ func to_data() -> Dictionary:
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
 		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "gd": gate_dmg,
-		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "tl": _tower_log_data()}
+		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "rl": rx_log, "sr": seen_rx, "jd": snappedf(joint_dmg, 1.0), "tl": _tower_log_data()}
 
 
 func _ice_data() -> Array:
@@ -1153,6 +1385,12 @@ func load_data(d: Dictionary) -> void:
 	_can_call = bool(d.get("cc", false))
 	undo_flags = d.get("un", [])
 	_rq = d.get("rq", [])
+	rx_log = {}
+	var rl: Dictionary = d.get("rl", {})
+	for k in rl:
+		rx_log[str(k)] = int(rl[k])
+	seen_rx = d.get("sr", [])
+	joint_dmg = float(d.get("jd", 0.0))
 	hp_log = []
 	for v in d.get("hl", []):
 		hp_log.append(int(v) if v != null else 0)
@@ -1168,18 +1406,27 @@ func load_data(d: Dictionary) -> void:
 func enemies_data() -> Array:
 	var out := []
 	for en in enemies:
+		var code := ""
+		for i in GData.STATUS_ORDER.size():
+			if (en["st"] as Dictionary).has(GData.STATUS_ORDER[i]):
+				code += str(i)
 		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), roundi(en["max"]), snappedf(en["slow"], 0.01),
-			is_hidden(en), snappedf(float(en.get("shred", 0.0)), 0.01), float(en.get("oil", 0.0)) > 0.0, roundi(float(en.get("sh", 0.0))), snappedf(float(en.get("sk", 0.0)), 0.1)])
+			is_hidden(en), code, float(en.get("stun", 0.0)) > 0.0, roundi(float(en.get("sh", 0.0))), snappedf(float(en.get("sk", 0.0)), 0.1)])
 	return out
 
 
 func load_enemies(rows: Array) -> void:
 	enemies = []
 	for r in rows:
+		var stt := {}
+		var code := str(r[8]) if r.size() > 8 else ""
+		for ch in code:
+			if ch.is_valid_int() and int(ch) < GData.STATUS_ORDER.size():
+				stt[GData.STATUS_ORDER[int(ch)]] = [1.0, -1, 0.0]
 		enemies.append({"id": int(r[0]), "type": str(r[1]), "e": int(r[2]), "dist": float(r[3]), "hp": float(r[4]),
-			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "shred": float(r[8]) if r.size() > 8 else 0.0, "shred_t": 0.0,
-			"oil": 1.0 if r.size() > 9 and bool(r[9]) else 0.0, "sh": float(r[10]) if r.size() > 10 else 0.0, "sk": float(r[11]) if r.size() > 11 else 0.0,
-			"cell": -1, "done": []})
+			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "st": stt,
+			"stun": 1.0 if r.size() > 9 and bool(r[9]) else 0.0, "sh": float(r[10]) if r.size() > 10 else 0.0,
+			"sk": float(r[11]) if r.size() > 11 else 0.0, "cell": -1, "done": [], "rx_t": 0.0})
 
 
 ## 결과 화면용: 피해가 큰 포탑 3개만 보낸다

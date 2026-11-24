@@ -24,6 +24,7 @@ func _init() -> void:
 	_waves()
 	_rewards()
 	_early()
+	_reactions()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -242,20 +243,14 @@ func _towers() -> void:
 	cold.enemies = [_enemy(1, 4.0), _enemy(2, 5.0), _enemy(3, 6.0)]
 	cold.phase = "combat"
 	cold._fire(0.05)
-	ok(cold.enemies.all(func(e): return float(e["slow"]) == 0.3), "냉각탑은 범위 안 전부 30% 감속")
-	var line := GMatch.new(["A", "B"])
-	line.players[0]["gold"] = 1000
-	line.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
-	var id: int = line.towers.keys()[0]
-	line.apply(0, {"op": "upgrade", "id": id})
-	line.apply(0, {"op": "upgrade", "id": id, "branch": "b"})
-	line.board.paths[0] = [Vector2i(0, 8), Vector2i(1, 8), Vector2i(2, 8), Vector2i(3, 8)]
-	line.towers[id]["y"] = 8
-	line.towers[id]["x"] = 0
-	line.enemies = [_enemy(1, 1.0), _enemy(2, 2.0), _enemy(3, 3.0)]
-	line.phase = "combat"
-	line._fire(0.05)
-	ok(line.enemies.all(func(e): return float(e["hp"]) < 100.0), "관통 장포신은 일직선의 적을 모두 맞힘")
+	ok(cold.enemies.all(func(e): return (e["st"] as Dictionary).has("cold") and is_equal_approx(cold.move_slow(e), 0.3)), "냉각탑은 범위 안 전부 냉기 (30% 감속)")
+	var ap := GMatch.new(["A", "B"])
+	ap.phase = "combat"
+	var hv := _enemy(1, 2.0)
+	hv["type"] = "heavy"
+	ap.enemies = [hv]
+	ap._hurt(hv, GData.tower_stats("gun", 3, "b"), 0)
+	ok(is_equal_approx(100.0 - float(hv["hp"]), 16.0), "철갑탄은 방어 무시")
 	# 전기탑: 연쇄, 감속된 적은 2배
 	var sh := GMatch.new(["A", "B"], [["shock", "cold", "gun", "oil", "flame"]])
 	sh.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3})
@@ -264,29 +259,29 @@ func _towers() -> void:
 	sh.phase = "combat"
 	sh._fire(0.05)
 	ok(sh.enemies.all(func(e): return float(e["hp"]) < 100.0), "전기탑 번개가 세 명에게 튐")
-	ok(100.0 - float(sh.enemies[2]["hp"]) > (100.0 - float(sh.enemies[0]["hp"])) * 1.5, "감속된 적은 전기 피해 2배")
+	ok(sh.enemies.all(func(e): return (e["st"] as Dictionary).has("shock")), "번개 맞은 적은 감전")
 	# 불꽃 + 기름
 	var f := GMatch.new(["A", "B"])
 	f.phase = "combat"
 	var a := _enemy(1, 2.0)
 	var b := _enemy(2, 2.0)
 	f.enemies = [a, b]
-	b["oil"] = 3.0
+	f._apply_status(b, "oil", 1)
 	var flame := GData.tower_stats("flame", 1, "")
 	f._hurt(a, flame, 0)
 	f._hurt(b, flame, 0)
-	ok(is_equal_approx(100.0 - float(b["hp"]), (100.0 - float(a["hp"])) * 3.0), "기름 묻은 적은 불꽃 피해 3배")
+	ok((a["st"] as Dictionary).has("burn") and 100.0 - float(b["hp"]) >= 30.0 and int(f.rx_log.get("ignite", 0)) == 1, "기름 + 화상 = 인화 폭발")
 	var golem := _enemy(3, 2.0)
 	golem["type"] = "golem"
 	f.enemies.append(golem)
 	f._hurt(golem, flame, 0)
-	ok(float(golem["hp"]) == 100.0, "내열 골렘은 불 면역")
+	ok(float(golem["hp"]) == 100.0 and not (golem["st"] as Dictionary).has("burn"), "내열 골렘은 불·화상 면역")
 	var oil := GMatch.new(["A", "B"])
 	oil.phase = "combat"
 	var c := _enemy(1, 2.0)
 	oil.enemies = [c]
 	oil._hurt(c, GData.tower_stats("oil", 1, ""), 0)
-	ok(float(c["oil"]) > 0.0, "기름분사탑은 기름 상태를 묻힘")
+	ok((c["st"] as Dictionary).has("oil"), "기름분사탑은 기름 상태를 묻힘")
 	# 신호탑: 주변 사거리 +15%, 유령 실체화
 	var sg := GMatch.new(["A", "B"], [["gun", "signal", "cold", "oil", "flame"]])
 	sg.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
@@ -520,7 +515,92 @@ func _early() -> void:
 
 func _enemy(id: int, dist: float) -> Dictionary:
 	return {"id": id, "type": "grunt", "e": 0, "dist": dist, "hp": 100.0, "max": 100.0, "slow": 0.0, "slow_t": 0.0,
-		"shred": 0.0, "shred_t": 0.0, "oil": 0.0, "sh": 0.0, "cell": -1, "sk": 0.0, "done": []}
+		"sh": 0.0, "cell": -1, "sk": 0.0, "done": [], "st": {}, "rx_t": 0.0, "stun": 0.0, "arm_dn": 0.0, "brit_t": 0.0, "melt_t": 0.0}
+
+
+## 반응 한 번: a 상태를 o1 이, b 상태를 o2 가
+func _rx(a: String, b: String, o1 := 0, o2 := 0) -> Array:
+	var m := GMatch.new(["A", "B"])
+	m.phase = "combat"
+	var en := _enemy(1, 6.0)
+	en["hp"] = 1000.0
+	en["max"] = 1000.0
+	var near := _enemy(2, 6.3)
+	near["hp"] = 1000.0
+	near["max"] = 1000.0
+	m.enemies = [en, near]
+	m._apply_status(en, a, o1)
+	m._apply_status(en, b, o2)
+	return [m, en, near]
+
+
+func _reactions() -> void:
+	var r := _rx("oil", "burn")
+	ok(int(r[0].rx_log.get("ignite", 0)) == 1 and float(r[2]["hp"]) <= 970.0 and not (r[1]["st"] as Dictionary).has("oil"), "인화: 반지름 1칸 폭발 30, 두 상태 사라짐")
+	r = _rx("oil", "cold")
+	ok(float(r[1]["stun"]) >= 1.5, "굳음: 1.5초 멈춤")
+	r = _rx("oil", "shock")
+	ok(float(r[1]["hp"]) <= 980.0, "합선: 기름 묻은 적 피해 20")
+	r = _rx("cold", "burn")
+	ok(float(r[1]["arm_dn"]) == 1.0 and float(r[1]["hp"]) <= 985.0, "열충격: 방어 영구 -1, 피해 15")
+	r = _rx("cold", "shock")
+	ok(float(r[2]["hp"]) < 1000.0, "초전도: 주변 적에게 번개")
+	r = _rx("cold", "mag")
+	ok(float(r[1]["brit_t"]) > 0.0 and (r[1]["st"] as Dictionary).has("mag"), "취성: 물리 피해 +50%, 자성은 남음")
+	var m: GMatch = r[0]
+	var plain := _enemy(3, 6.0)
+	m.enemies.append(plain)
+	var gun := GData.tower_stats("gun", 1, "")
+	var h0 := float(r[1]["hp"])
+	m._hurt(r[1], gun, 0)
+	m._hurt(plain, gun, 0)
+	ok(h0 - float(r[1]["hp"]) > (100.0 - float(plain["hp"])) * 1.4, "취성 적에게 물리 피해 증가")
+	r = _rx("mag", "shock")
+	ok(int(r[0].rx_log.get("emag", 0)) == 1 and float(r[2]["dist"]) < 6.3, "전자석: 끌어모음")
+	r = _rx("mag", "burn")
+	ok(float(r[1]["melt_t"]) > 0.0, "가열 장갑: 방어력 0")
+	r = _rx("shock", "burn")
+	ok((r[2]["st"] as Dictionary).has("burn") and float(r[2]["hp"]) <= 975.0, "과열: 주변 피해 25, 화상 퍼짐")
+	# 산산조각
+	var sm := GMatch.new(["A", "B"])
+	sm.phase = "combat"
+	var ice := _enemy(1, 6.0)
+	ice["hp"] = 1000.0
+	sm.enemies = [ice]
+	sm._apply_status(ice, "cold", 1)
+	sm._hurt(ice, GData.tower_stats("cannon", 3, "b"), 0)
+	ok(is_equal_approx(1000.0 - float(ice["hp"]), 52.0 * 1.5) and int(sm.rx_log.get("shatter", 0)) == 1, "산산조각: 냉기 + 한 방 40 이상 = ×1.5")
+	# 미끄럼
+	var sl := GMatch.new(["A", "B"])
+	sl.apply(0, {"op": "build", "type": "spike", "x": 1, "y": 4})
+	sl.phase = "combat"
+	var w := _enemy(1, 0.6)
+	w["hp"] = 1000.0
+	sl.enemies = [w]
+	sl._apply_status(w, "oil", 1)
+	for _i in 20:
+		sl._move_enemies(0.05)
+	ok(int(sl.rx_log.get("slip", 0)) == 1 and 1000.0 - float(w["hp"]) >= 40.0, "미끄럼: 기름 + 덫 = 덫 피해 ×2")
+	# 증폭
+	var am := _rx("mark", "oil")
+	am[0]._apply_status(am[1], "burn", 1)
+	ok(int(am[0].rx_log.get("amp", 0)) == 1 and float(am[2]["hp"]) <= 1000.0 - 30.0 * 2.0 * 1.25 + 0.01, "증폭: 표식 + 반응 = 피해 ×2")
+	ok((am[1]["st"] as Dictionary).has("mark"), "표식은 반응 뒤에도 남음")
+	# 다른 사람끼리 +25%
+	var same := _rx("oil", "burn", 0, 0)
+	var cross := _rx("oil", "burn", 0, 1)
+	ok(is_equal_approx(1000.0 - float(cross[2]["hp"]), (1000.0 - float(same[2]["hp"])) * 1.25), "다른 사람 포탑끼리 만든 반응 +25%")
+	ok(float(cross[0].joint_dmg) > 0.0 and int(cross[0].players[1]["rx"]) == 1, "함께 만든 피해와 반응 기여 기록")
+	# 1초에 한 번
+	var once := _rx("oil", "burn")
+	once[0]._apply_status(once[1], "oil", 0)
+	once[0]._apply_status(once[1], "burn", 0)
+	ok(int(once[0].rx_log.get("ignite", 0)) == 1, "같은 적 반응은 1초에 한 번")
+	ok(once[0].seen_rx == ["ignite"], "처음 나온 반응은 도감에")
+	var copy := GMatch.new()
+	copy.load_data(JSON.parse_string(JSON.stringify(once[0].to_data())))
+	copy.load_enemies(JSON.parse_string(JSON.stringify(once[0].enemies_data())))
+	ok(copy.seen_rx == ["ignite"] and (copy.enemies[0]["st"] as Dictionary).has("oil"), "반응 기록·상태 동기화")
 
 
 func _sync() -> void:

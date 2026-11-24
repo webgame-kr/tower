@@ -158,6 +158,8 @@ const FONT_STEPS := [90, 100, 120, 150]
 var reject_btn: Button
 var quick_btn: Button
 var _quick_open := false
+var _newrx := ""               # 처음 나온 반응 알림
+var _newrx_t := 0.0
 # ── 카메라 (각자의 것, 네트워크로 보내지 않음) ──
 var _zoom := 2                 # 1 = 원본 x1 (맵 전체), 2 = x2 (기본)
 var _cam := Vector2(10, 6)     # 화면 가운데에 오는 칸 좌표
@@ -533,7 +535,8 @@ func _build_pause() -> void:
 	pause_btns["back"] = _btn(pause, Rect2(462, 246, 356, 46), "게임으로 돌아가기    ", _toggle_pause, "pri", T.BODY)
 	pause_btns["settings"] = _btn(pause, Rect2(462, 306, 356, 46), "설정", _open_settings, "sec", T.BODY)
 	pause_btns["help"] = _btn(pause, Rect2(462, 366, 356, 46), "조작 안내", _open_panel.bind("help"), "sec", T.BODY)
-	pause_btns["mute"] = _btn(pause, Rect2(462, 426, 356, 46), "채팅 음소거 관리", _open_panel.bind("mute"), "sec", T.BODY)
+	pause_btns["mute"] = _btn(pause, Rect2(462, 426, 174, 46), "음소거", _open_panel.bind("mute"), "sec", T.BODY)
+	pause_btns["codex"] = _btn(pause, Rect2(644, 426, 174, 46), "반응 도감", _open_panel.bind("codex"), "sec", T.BODY)
 	pause_btns["leave"] = _btn(pause, Rect2(462, 506, 356, 44), "방 나가기", _on_leave, "danger", T.BODY)
 	pause_btns["close"] = _btn(pause, Rect2(804, 150, 28, 28), "", _toggle_pause, "sec", T.LABEL)
 	var tabs := ["그래픽", "조작", "오디오", "접근성"]
@@ -1257,7 +1260,8 @@ func _predict(delta: float) -> void:
 		var id := int(en["id"])
 		alive[id] = true
 		if not s.is_host:
-			en["dist"] = float(en["dist"]) + float(GData.ENEMIES[en["type"]]["speed"]) * (1.0 - float(en["slow"])) * delta
+			if float(en.get("stun", 0.0)) <= 0.0:
+				en["dist"] = float(en["dist"]) + float(GData.ENEMIES[en["type"]]["speed"]) * GData.SPEED_MUL * (1.0 - s.m.move_slow(en)) * delta
 		var cur: float = _disp.get(id, float(en["dist"]))
 		_disp[id] = lerpf(cur, float(en["dist"]), 1.0 - exp(-14.0 * delta))
 	for id in _disp.keys():
@@ -1278,6 +1282,15 @@ func _take_fx() -> void:
 				_fxs.append({"k": "gate", "e": int(f.get("e", 0)), "n": int(f["n"]), "t": 1.4, "life": 1.4})
 			"early":
 				_say("다음 웨이브를 일찍 불렀어요 · 전원 보너스 +%dG" % int(f["n"]))
+			"rx":
+				_fxs.append({"k": "rx", "a": Vector2(f["x"], f["y"]), "n": str(f["n"]), "o": f.get("o", []), "amp": bool(f.get("amp", false)), "t": 0.8, "life": 0.8})
+			"newrx":
+				_newrx = str(f["n"])
+				_newrx_t = 2.0
+			"boom":
+				_fxs.append({"k": "kill", "a": Vector2(f["x"], f["y"]), "big": true, "t": 0.45, "life": 0.45})
+			"puddle":
+				_fxs.append({"k": "puddle", "a": Vector2(f["x"], f["y"]), "t": float(f["t"]), "life": float(f["t"])})
 			"kill":
 				_fxs.append({"k": "kill", "a": Vector2(f["x"], f["y"]), "big": bool(f.get("big", false)), "t": 0.45, "life": 0.45})
 			"num":
@@ -1298,6 +1311,7 @@ func _take_fx() -> void:
 ## 카메라: WASD·방향키, 화면 가장자리, 준비 시작 때 x1 잠깐
 func _update_camera(delta: float) -> void:
 	var m := s.m
+	_newrx_t -= delta
 	if m.phase != _last_phase:
 		if m.phase == "prep" and _last_phase != "":
 			_overview_t = 1.0
@@ -2850,13 +2864,20 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 	var lit := ceili(ratio * segs)
 	for k in lit:
 		_prect(Rect2(left + Vector2(k * (w + 1), 0), Vector2(w, 3)), col)
-	if float(en.get("shred", 0.0)) > 0.0:
-		_icon(Vector2i(3, 0), Rect2(center + Vector2(size_px * 0.22 - 14, -size_px * 0.5 - 2), Vector2(13, 13)))
-	if float(en["slow"]) > 0.0:
+	var chip := 4.0 * CELL / TILE
+	var n := 0
+	for k in GData.STATUS_ORDER:
+		if not (en.get("st", {}) as Dictionary).has(k) or n >= 3:
+			continue
+		var cp := _ev(left + Vector2(n * (chip + 2), -chip - 4))
+		_prect(Rect2(cp - Vector2(2, 2), Vector2(chip + 4, chip + 4)), OUTLINE)
+		_prect(Rect2(cp, Vector2(chip, chip)), Color(str(GData.STATUS[k]["col"])))
+		n += 1
+	if float(en["slow"]) > 0.0 and n < 3:
 		_icon(Vector2i(0, 0), Rect2(center + Vector2(size_px * 0.22, -size_px * 0.5 - 2), Vector2(13, 13)))
-	if float(en.get("oil", 0.0)) > 0.0:      # 기름: 불꽃탑 피해 3배
-		_pcircle(center + Vector2(-size_px * 0.32, size_px * 0.3), 3.5, Color("2A1E12"))
-		_pcircle(center + Vector2(-size_px * 0.22, size_px * 0.38), 2.5, Color("2A1E12"))
+	if float(en.get("stun", 0.0)) > 0.0:      # 멈춤
+		for i in 3:
+			_prect(Rect2(_ev(center + Vector2(-8 + i * 8, -size_px * 0.5 - 12 - (i % 2) * 4)), Vector2(4, 4)), Color("F2D640"))
 	if float(en.get("sh", 0.0)) > 0.0:      # 수송차 보호막
 		_parc(center, size_px * 0.58, 0, TAU, 20, Color("E9B935", 0.8), 1.8, true)
 
@@ -2895,6 +2916,24 @@ func _draw_fx() -> void:
 				for n in 6:
 					var d := Vector2.from_angle(TAU * n / 6.0 + 0.4)
 					_pline(c + d * rr * 0.6, c + d * rr * 1.1, Color(1, 0.7, 0.3, k), 2.0)
+			"rx":
+				var c := _p(f["a"] * 1.0) + Vector2(0, -CELL * 0.9 - (1.0 - k) * 16.0)
+				var rd: Dictionary = GData.REACTIONS[str(f["n"])]
+				var label := str(rd["name"]) + (" ×2" if bool(f["amp"]) else "")
+				var w := _sz(label, T.LABEL).x
+				_tx(Rect2(_ev(c - Vector2(w * 0.5, 12)), Vector2(w, 24)), label, T.LABEL, Color(str(rd["col"])))
+				var os: Array = f["o"]
+				for i in os.size():
+					var o := int(os[i])
+					if o >= 0 and o < s.m.players.size():
+						var dp := _ev(c + Vector2(-8 + i * 10, 14))
+						_prect(Rect2(dp, Vector2(8, 8)), OUTLINE)
+						_prect(Rect2(dp + Vector2(2, 2), Vector2(4, 4)), OWNER[int(s.m.players[o].get("col", 0)) % 4])
+			"puddle":
+				var c := _p(f["a"] * 1.0)
+				var pw := CELL * 0.7
+				_prect(Rect2(_ev(c - Vector2(pw * 0.5, CELL * 0.18)), _ev(Vector2(pw, CELL * 0.36))), Color("2A1E12"))
+				_prect(Rect2(_ev(c - Vector2(pw * 0.3, CELL * 0.12)), _ev(Vector2(pw * 0.2, 2))), Color("6A5438"))
 			"num":
 				if bool(cfg["dmg"]):
 					var c := _p(f["a"] * 1.0) + Vector2(0, -CELL * 0.6 - (1.0 - k) * 18.0)
@@ -3436,6 +3475,8 @@ func _draw_game() -> void:
 		_banner("보스 접근 · %s · 도착 시 본부 −15" % GData.ENEMIES[bt]["name"], DANGER, true)
 	elif m.phase == "prep" and _summary_t > 0.0 and not m.summary.is_empty():
 		_banner(_summary_text(m), AMBER)
+	elif _newrx_t > 0.0 and GData.REACTIONS.has(_newrx):
+		_banner("새 반응 · %s" % GData.REACTIONS[_newrx]["name"], Color(str(GData.REACTIONS[_newrx]["col"])))
 	elif _notice_t > 0.0 and _trans_t <= 0.0:
 		var th: Dictionary = GData.THEMES[_theme]
 		_banner("%s — %s" % [th["name"], th["desc"]], AMBER)
@@ -4241,23 +4282,21 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 	_prect(Rect2(tx + _sz(mk, T.LABEL).x + 10, r.position.y + 46, 10, 10), OWNER[col])
 	var st := GData.tower_stats(t["type"], lv, str(t["branch"]))
 	st["range"] = m.tower_range(t)
+	var stn := str(st["st"])
+	if stn != "":      # 남기는 상태 칩
+		var cx := tx + _sz(mk, T.LABEL).x + 28
+		_prect(Rect2(cx, r.position.y + 44, 14, 14), OUTLINE)
+		_prect(Rect2(cx + 2, r.position.y + 46, 10, 10), Color(str(GData.STATUS[stn]["col"])))
+		_tx(Rect2(cx + 20, r.position.y + 38, 80, 24), str(GData.STATUS[stn]["name"]), T.LABEL, INK)
 	var rows: Array = []
-	if t["type"] == "cold":
-		rows = [["감속", "%d%%" % roundi(st["slow"] * 100)], ["범위" if st["aura"] else "사거리", "%.1f칸" % st["range"]]]
-	elif t["type"] == "signal":
-		rows = [["사거리 증가", "+%d%%" % roundi(st["buff"] * 100)], ["범위", "%.1f칸" % st["range"]]]
+	if bool(st["support"]):
+		rows = [["사거리 증가", "+%d%%" % roundi(st["buff"] * 100)], ["표식 범위", "%.1f칸" % st["mark_r"]]]
 	elif bool(st["trap"]):
 		rows = [["피해", "%.0f" % st["dmg"]], ["내구", "%d/%d" % [int(t["uses"]), int(st["uses"])]]]
-	elif t["type"] == "oil":
-		rows = [["기름", "%.0f초" % st["oil"]], ["사거리", "%.1f칸" % st["range"]]]
-	elif t["type"] == "shock":
-		rows = [["피해", "%.0f" % st["dmg"]], ["연쇄", "%d명" % int(st["chain"])]]
-	elif t["type"] == "flame":
+	elif bool(st["aura"]) and float(st["cd"]) < 0.5:
 		rows = [["초당 피해", "%.0f" % (st["dmg"] / st["cd"])], ["범위", "%.1f칸" % st["range"]]]
-	elif t["type"] == "magnet":
-		rows = [["방어 감소", "%d%%" % roundi(st["shred"] * 100)], ["범위" if st["aura"] else "사거리", "%.1f칸" % st["range"]]]
 	else:
-		rows = [["피해", "%.0f" % st["dmg"]], ["사거리", "%.1f칸" % st["range"]]]
+		rows = [["피해", "%.0f" % st["dmg"] if int(st["chain"]) == 0 else "%.0f ×%d명" % [st["dmg"], int(st["chain"])]], ["범위" if st["aura"] else "사거리", "%.1f칸" % st["range"]]]
 	var kills := 0
 	if m.tower_log.has(int(t["id"])):
 		kills = int(m.tower_log[int(t["id"])][5])
@@ -4268,11 +4307,23 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 		_tx(rr, str(row[0]), T.LABEL, SUB)
 		_tx(rr, str(row[1]), T.LABEL, INK, 2)
 		y += 24
+	# 터뜨리는 반응 (팀원 포탑과 무엇이 맞는지)
+	if stn != "":
+		var names := []
+		for rx in GData.reactions_with(stn):
+			names.append(str(GData.REACTIONS[rx]["name"]))
+		var line := " · ".join(names)
+		while line.length() > 2 and _sz(line, T.LABEL).x > r.size.x - 20:
+			line = line.left(line.length() - 1)
+		_tx(Rect2(r.position.x + 10, y, r.size.x - 20, 24), line, T.LABEL, AMBER)
 	# 마우스 올리면 나머지 수치
-	var stat_box := Rect2(r.position.x, head.end.y + 8, r.size.x, 72)
+	var stat_box := Rect2(r.position.x, head.end.y + 8, r.size.x, 96)
 	if stat_box.has_point(get_local_mouse_position() - _off):
 		var cover := Board.coverage(Vector2i(int(t["x"]), int(t["y"])), float(st["range"]), m.board.paths)
-		_tip(Vector2(r.position.x - 120, stat_box.get_center().y), "사거리 안 길 %d칸 · 간격 %.2f초 · %s" % [cover, st["cd"], d["role"]])
+		var more := "사거리 안 길 %d칸 · 간격 %.2f초" % [cover, st["cd"]]
+		if stn != "":
+			more += " · 반응: " + ", ".join(GData.reactions_with(stn).map(func(k): return GData.REACTIONS[k]["name"]))
+		_tip(Vector2(r.position.x - 220, stat_box.get_center().y), more)
 	if not mine:
 		_tx(Rect2(r.position.x + 10, y + 8, r.size.x - 20, 24), "%s의 포탑" % str(owner["name"]).left(6), T.LABEL, SUB)
 
@@ -4421,7 +4472,10 @@ func _draw_result() -> void:
 	var total_kills := 0
 	for p in m.players:
 		total_kills += int(p["kills"])
-	var stats := [["막은 웨이브", str(held)], ["버틴 시간", _clock2(m.time)], ["처치", str(total_kills)], ["지나온 테마", "%d개" % (GData.theme_of(m.wave) + 1)]]
+	var rx_n := 0
+	for k in m.rx_log:
+		rx_n += int(m.rx_log[k])
+	var stats := [["막은 웨이브", str(held)], ["버틴 시간", _clock2(m.time)], ["처치", str(total_kills)], ["반응", "%d회" % rx_n]]
 	for i in 4:
 		var r := Rect2(34 + i * 158, 114, 150, 84)
 		_nine(r, "panel_steel")
@@ -4489,6 +4543,7 @@ func _draw_result() -> void:
 	var tb := Rect2(684, 114, 562, 44 + n * (rh + 8))
 	_nine(tb, "panel_steel")
 	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(200, 24)), "팀 기록", T.LABEL, SUB)
+	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(tb.size.x - 20, 24)), "함께 만든 피해 %s" % _kilo(m.joint_dmg), T.LABEL, AMBER, 2)
 	var cols := [["피해", 896.0], ["처치", 986.0], ["포탑", 1078.0], ["길", 1160.0]]
 	for c in cols:
 		_tx(Rect2(c[1] - 40, tb.position.y + 8, 80, 24), c[0], T.LABEL, SUB, 1)
@@ -4611,6 +4666,25 @@ func _draw_pause() -> void:
 					_nine(row, "panel_dark")
 					_key_chip(row.position + Vector2(14, 12), str(keys[i][0]))
 					_t(row.position + Vector2(140, 8), str(keys[i][1]), T.LABEL, INK)
+			"codex":
+				_modal(r, "반응 도감 · 이번 판 %d/%d" % [s.m.seen_rx.size() if s.m != null else 0, GData.REACTION_ORDER.size()])
+				for i in GData.REACTION_ORDER.size():
+					var key: String = GData.REACTION_ORDER[i]
+					var rd: Dictionary = GData.REACTIONS[key]
+					var seen: bool = s.m != null and s.m.seen_rx.has(key)
+					var row := Rect2(320 + (i % 2) * 324, 136 + (i / 2) * 70, 316, 62)
+					_nine(row, "panel_dark")
+					var cx := row.position.x + 12
+					for stk in [rd["a"], rd["b"]]:
+						if str(stk) == "":
+							continue
+						_prect(Rect2(cx, row.position.y + 12, 14, 14), OUTLINE)
+						_prect(Rect2(cx + 2, row.position.y + 14, 10, 10), Color(str(GData.STATUS[stk]["col"])))
+						cx += 18
+					_tx(Rect2(cx + 6, row.position.y + 4, 200, 28), str(rd["name"]), T.STRONG, Color(str(rd["col"])) if seen else SUB)
+					if seen and s.m != null:
+						_tx(Rect2(row.position.x, row.position.y + 4, row.size.x - 12, 28), "%d회" % int(s.m.rx_log.get(key, 0)), T.LABEL, AMBER, 2)
+					_tx(Rect2(row.position.x + 12, row.position.y + 32, row.size.x - 24, 24), str(rd["desc"]), T.LABEL, INK if seen else Color("6A6660"))
 			"mute":
 				_modal(r, "채팅 음소거 관리")
 				_t(Vector2(320, 140), "음소거한 사람의 채팅과 핑을 내 화면에서만 숨겨요", T.LABEL, SUB)

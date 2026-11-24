@@ -39,7 +39,7 @@ static func pick_hand(m: GMatch, seat: int) -> void:
 		var st := str(GData.tower_stats(k, 1, "")["st"])
 		var v := 10.0 - prefer.find(k) * 0.5 if prefer.has(k) else 5.0
 		if not use_reactions:
-			v += 6.0 if st == "" else -6.0
+			v += 6.0 if not GData.leaves_status(k) else -6.0
 		else:
 			for o in team_st:
 				if st != "" and GData.reaction_of(st, o) != "":
@@ -49,7 +49,7 @@ static func pick_hand(m: GMatch, seat: int) -> void:
 	var kit := []
 	if str(p["lock"]) != "":
 		kit.append(p["lock"])
-	var dmg_rows := scored.filter(func(r): return DAMAGE.has(r[1]) and (use_reactions or str(GData.tower_stats(r[1], 1, "")["st"]) == ""))      # 화력 2장 먼저
+	var dmg_rows := scored.filter(func(r): return DAMAGE.has(r[1]) and (use_reactions or not GData.leaves_status(r[1])))      # 화력 2장 먼저
 	for row in dmg_rows.slice(0, 2):
 		if kit.size() < GData.KIT_SIZE and not kit.has(row[1]):
 			kit.append(row[1])
@@ -140,7 +140,10 @@ static func _spend(m: GMatch, seat: int) -> void:
 		if mine.size() >= 4:
 			var up := _cheapest_upgrade(mine)
 			if not up.is_empty() and gold >= int(up["cost"]):
-				if m.apply(seat, {"op": "upgrade", "id": up["id"], "branch": "b" if up["type"] != "cold" else "a"}) == "":
+				var br := "b" if up["type"] != "cold" else "a"
+				if not use_reactions and GData.branch_status(up["type"], br):
+					br = "a" if br == "b" else "b"
+				if m.apply(seat, {"op": "upgrade", "id": up["id"], "branch": br}) == "":
 					continue
 		if gold < int(GData.TOWERS[want]["cost"]):
 			return

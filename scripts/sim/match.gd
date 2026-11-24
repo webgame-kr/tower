@@ -1736,7 +1736,7 @@ func _react(rx: String, en: Dictionary, o1: int, o2: int) -> void:
 	var stt: Dictionary = en["st"]
 	var amp := stt.has("mark")
 	var mo := int(stt["mark"][1]) if amp else -1
-	var mul := (1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)) * (1.0 + _rx_boost) * rx_scale()
+	var mul := (1.0 + (GData.CROSS_BONUS if o1 != o2 else 0.0)) * (1.0 + _rx_boost) * rx_scale() * GData.RX_DMG
 	if amp:
 		mul *= 2.0
 	for o in [o1, o2]:

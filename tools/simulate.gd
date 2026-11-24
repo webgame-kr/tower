@@ -14,15 +14,18 @@ func _init() -> void:
 	var seeds := [11, 23]
 	if args.size() > 2:
 		seeds = Array(args[2].split(",")).map(func(v): return int(v))
+	var only := args[3] if args.size() > 3 else ""      # blind / smart 하나만
 	print("hp_mul ", GData.hp_mul)
 	for n in ns:
 		var a := []
 		var b := []
 		for sd in seeds:
-			GBot.use_reactions = false
-			a.append(_run(n, sd))
-			GBot.use_reactions = true
-			b.append(_run(n, sd))
+			if only != "smart":
+				GBot.use_reactions = false
+				a.append(_run(n, sd))
+			if only != "blind":
+				GBot.use_reactions = true
+				b.append(_run(n, sd))
 		print("%d인 | 반응 안 씀: %s | 반응 씀: %s" % [n, " / ".join(a), " / ".join(b)])
 	quit()
 
@@ -43,6 +46,13 @@ func _run(players: int, sd: int) -> String:
 			for vk in m.players.size():
 				m.apply(vk, {"op": "vote", "v": "gold"})
 		elif m.phase == "prep":
+			if not GBot.use_reactions:      # 반응을 안 쓰는 팀: 상태 없는 포탑만
+				var plain := GData.unlocked(m.wave).filter(func(k): return not GData.leaves_status(k) and not GData.is_joint(k))
+				var order := ["cannon", "gun", "sniper", "crane", "spike", "conveyor", "generator"]
+				plain.sort_custom(func(a, b): return order.find(a) < order.find(b))
+				for s in players:
+					m.players[s]["kit"] = plain.slice(0, GData.KIT_SIZE)
+					m.players[s]["picked"] = true
 			for s in players:
 				if m.phase == "prep":
 					GBot.play_prep(m, s, true)

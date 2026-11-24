@@ -55,7 +55,7 @@ const HAND_SIZE := 6          # 준비 시작 때 나오는 카드 수
 const REROLL_COST := 30       # 다시 뽑기 (웨이브마다 첫 번은 무료)
 const TEAM_KIT_BONUS := 6     # 팀 공구함이 서로 다른 n종 이상이면 공사 자재 +1
 
-static var hp_mul := 3.4      # 적 체력 배율 (밸런스 조정용)
+static var hp_mul := 4.6      # 적 체력 배율 (밸런스 조정용)
 static var budget_scale := {1: 0.85, 2: 0.85, 3: 1.06, 4: 1.28}
 static var hp_scale := {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.15}
 const DIFFICULTY := {"easy": [0.8, 0.85, "느긋"], "normal": [1.0, 1.0, "보통"], "hard": [1.25, 1.15, "빡빡"]}      # [적 체력, 위협 예산]
@@ -320,7 +320,8 @@ const STATUS := {
 	"mark": {"name": "표식", "col": "#F4F1E8", "t": 5.0},
 }
 const STATUS_ORDER := ["oil", "burn", "cold", "shock", "mag", "mark"]
-const BURN_DPS := 4.0
+static var BURN_DPS := 6.0
+static var RX_DMG := 1.6         # 반응 피해 배율 (밸런스)
 const OIL_SLOW := 0.1
 const COLD_SLOW := 0.3
 const MAG_ARMOR := 2.0
@@ -369,6 +370,19 @@ const DEFAULT_KIT := ["gun", "cannon", "cold", "spike"]
 ## 테마가 지날수록 열리는 포탑 (초원은 기존 10종)
 const UNLOCK := [["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal", "spike"],
 	["steam", "cryo", "searchlight"], ["crane", "scrap", "welder"], ["generator", "conveyor"], []]
+
+
+## 이 포탑이 상태를 남기는지 (증기탑처럼 번갈아 남기는 것도)
+static func leaves_status(type: String) -> bool:
+	for r in TOWERS[type]["lv"]:      # 기본 단계 (갈래는 branch_status)
+		if str(r.get("st", "")) != "" or bool(r.get("st_alt", false)) or str(r.get("st2", "")) != "":
+			return true
+	return false
+
+
+static func branch_status(type: String, branch: String) -> bool:
+	var r: Dictionary = TOWERS[type][branch]
+	return str(r.get("st", "")) != "" or bool(r.get("st_alt", false)) or str(r.get("st2", "")) != ""
 
 
 static func is_joint(type: String) -> bool:

@@ -14,6 +14,8 @@ func ok(cond: bool, label: String) -> void:
 
 func _init() -> void:
 	GData.hp_mul = 1.8      # 수치 테스트는 기준 배율로 (반응 피해 비례 1배)
+	GData.RX_DMG = 1.0
+	GData.BURN_DPS = 4.0
 	_layout()
 	_roads()
 	_merge()

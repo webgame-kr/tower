@@ -433,8 +433,8 @@ func command(c: Dictionary) -> void:
 		var err := run(seat, c)
 		if err != "":
 			toasts.append(err)
-		elif solo and (c.get("op", "") == "speed" or c.get("op", "") == "vote"):
-			run(1, c)      # 연습 동료는 배속과 보상 투표를 사람에게 맞춘다
+		elif solo and str(c.get("op", "")) in ["speed", "vote", "call"]:
+			run(1, c)      # 연습 동료는 배속·보상 투표·일찍 부르기를 사람에게 맞춘다
 		return
 	_seq += 1
 	var id := "%s-%d" % [_nonce, _seq]

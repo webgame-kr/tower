@@ -4,11 +4,11 @@ extends SceneTree
 
 func _init() -> void:
 	for n in [2, 3, 4]:
-		print("%d인 | 포탑만: %s | 포탑+길: %s" % [n, _run(n, false), _run(n, true)])
+		print("%d인 | 포탑만: %s | 포탑+길: %s | 매번 일찍: %s | 짝수만 일찍: %s" % [n, _run(n, false), _run(n, true), _run(n, true, 1), _run(n, true, 2)])
 	quit()
 
 
-func _run(players: int, roads: bool) -> String:
+func _run(players: int, roads: bool, call_every := 0) -> String:
 	var names := []
 	for i in players:
 		names.append("P%d" % i)
@@ -33,5 +33,8 @@ func _run(players: int, roads: bool) -> String:
 				elif m.phase == "prep":
 					m.apply(s, {"op": "ready", "v": true})
 		else:
+			if call_every > 0 and m.wave % call_every == 0 and m.can_call():
+				for vk in m.players.size():
+					m.apply(vk, {"op": "call", "v": true})
 			m.step()
 	return "%s W%d 성%d %.0f초 포탑%d" % ["성공" if m.cleared else "패배", m.wave, m.hp, m.time, m.towers.size()]

@@ -19,6 +19,7 @@ func _init() -> void:
 	_towers()
 	_themes()
 	_rewards()
+	_early()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -218,6 +219,34 @@ func _rewards() -> void:
 	heavy["hp"] = 100.0
 	mag._hurt(heavy, gun, 0)
 	ok(100.0 - float(heavy["hp"]) > plain, "자석탑이 방어력을 깎으면 기관포 피해 증가")
+
+
+func _early() -> void:
+	var m := GMatch.new(["A", "B"])
+	m.wave = 2
+	m.apply(0, {"op": "ready", "v": true})
+	m.apply(1, {"op": "ready", "v": true})
+	ok(m.apply(0, {"op": "call", "v": true}) != "" and not m.can_call(), "적이 다 나오기 전에는 일찍 부를 수 없음")
+	var guard := 0
+	while not m._queue.is_empty() and guard < 5000:
+		m.step()
+		guard += 1
+	ok(m.can_call(), "적이 다 나오고 남아 있으면 일찍 부르기 가능")
+	var alive := m.enemies.size()
+	var gold: int = m.players[0]["gold"]
+	m.apply(0, {"op": "call", "v": true})
+	ok(m.wave == 2 and m.phase == "combat", "한 명만 부르면 그대로")
+	m.apply(1, {"op": "call", "v": true})
+	var want := GData.wave_gold(2) + GData.early_bonus(alive)
+	ok(m.wave == 3 and m.phase == "combat" and m.enemies.size() == alive, "전원 동의하면 남은 적을 둔 채 다음 웨이브 시작")
+	ok(int(m.players[0]["gold"]) == gold + want and int(m.summary["early"]) == GData.early_bonus(alive), "웨이브 골드 + 일찍 부르기 보너스")
+	ok(not bool(m.players[0]["call"]) and not bool(m.players[1]["call"]), "부르기 표는 초기화")
+	var b := GMatch.new(["A"])
+	b.wave = GData.THEME_LEN
+	b.phase = "combat"
+	b.enemies = [_enemy(1, 1.0)]
+	ok(not b.can_call(), "보스 웨이브는 일찍 부를 수 없음")
+	ok(GData.early_bonus(1) == GData.EARLY_MIN and GData.early_bonus(99) == GData.EARLY_MAX, "보너스 하한·상한")
 
 
 func _enemy(id: int, dist: float) -> Dictionary:

@@ -148,6 +148,17 @@ func _init() -> void:
 	ok(solo.chat.any(func(r): return int(r["seat"]) == 1 and r.has("x")), "연습 동료가 길 변경을 핑으로 제안")
 	solo.command({"op": "speed", "v": true})
 	ok(solo.m.speed == 2, "혼자 연습에서는 2배가 바로 켜짐")
+	var g2 := 0
+	while not solo.m.can_call() and solo.m.phase == "combat" and g2 < 5000:
+		solo.m.step()
+		g2 += 1
+	var w := solo.m.wave
+	solo.command({"op": "call", "v": true})
+	ok(solo.m.wave == w + 1, "혼자 연습에서는 일찍 부르기가 바로 됨")
+	var data := solo.m.to_data()
+	var copy := GMatch.new()
+	copy.load_data(JSON.parse_string(JSON.stringify(data)))
+	ok(copy.can_call() == solo.m.can_call(), "손님 사본도 일찍 부르기 가능 여부를 앎")
 
 	print("net %d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)

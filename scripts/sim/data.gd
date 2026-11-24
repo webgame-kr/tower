@@ -112,6 +112,16 @@ static func wave_gold(wave: int) -> int:
 	return 120 + wave * 20
 
 
+## 일찍 부르기: 적이 다 나온 뒤 남은 적이 많을수록 보너스가 크다 (위험을 감수한 만큼)
+const EARLY_PER_ENEMY := 6
+const EARLY_MIN := 30
+const EARLY_MAX := 120
+
+
+static func early_bonus(alive: int) -> int:
+	return clampi(alive * EARLY_PER_ENEMY, EARLY_MIN, EARLY_MAX)
+
+
 static func theme_of(wave: int) -> int:
 	return clampi((wave - 1) / THEME_LEN, 0, THEMES.size() - 1)
 

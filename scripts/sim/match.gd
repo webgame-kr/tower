@@ -22,6 +22,8 @@ var leaks: Dictionary = {}   # 성에 도착한 적 종류별 수
 var speed := 1               # 전투 배속 (2배는 접속 중인 전원 동의)
 
 var _queue: Array = []
+var _can_call := false       # 손님 쪽 사본: 호스트가 알려준 일찍 부르기 가능 여부
+var is_copy := false
 var _wave_t := 0.0
 var _next_id := 1
 
@@ -36,7 +38,7 @@ func _init(names: Array = []) -> void:
 	for i in names.size():
 		var n = names[i]
 		players.append({"name": str(n), "col": i, "gold": GData.START_GOLD, "ready": false, "online": true, "used": false,
-			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0, "edits": GData.EDITS_PER_PLAYER, "fast": false, "free_up": 0, "vote": ""})
+			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0, "edits": GData.EDITS_PER_PLAYER, "fast": false, "free_up": 0, "vote": "", "call": false})
 
 
 func team_edits() -> int:
@@ -72,6 +74,8 @@ func apply(seat: int, c: Dictionary) -> String:
 		return _speed(seat, bool(c.get("v", false)))
 	if op == "vote":
 		return _vote(seat, str(c.get("v", "")))
+	if op == "call":
+		return _call(seat, bool(c.get("v", true)))
 	if phase != "prep":
 		return "준비 단계에서만 할 수 있어요"
 	var err := ""
@@ -102,6 +106,44 @@ func _speed(seat: int, want_fast: bool) -> String:
 			p["fast"] = false
 	version += 1
 	return ""
+
+
+## 지금 다음 웨이브를 일찍 부를 수 있는지: 이번 웨이브 적이 다 나왔고, 보스·마지막 웨이브가 아닐 때
+func can_call() -> bool:
+	if is_copy:
+		return _can_call
+	return phase == "combat" and _queue.is_empty() and not enemies.is_empty() 		and wave % GData.THEME_LEN != 0 and wave < GData.LAST_WAVE
+
+
+func call_votes() -> int:
+	var n := 0
+	for p in players:
+		if p["online"] and bool(p.get("call", false)):
+			n += 1
+	return n
+
+
+## 일찍 부르기는 접속 중인 전원이 동의해야 한다. 이번 웨이브 골드에 보너스를 얹고 남은 적은 그대로 둔 채 다음 웨이브를 연다.
+func _call(seat: int, v: bool) -> String:
+	if v and not can_call():
+		return "적이 다 나온 뒤에 부를 수 있어요"
+	players[seat]["call"] = v
+	version += 1
+	if v and call_votes() >= online_count():
+		_call_early()
+	return ""
+
+
+func _call_early() -> void:
+	var bonus := GData.early_bonus(enemies.size())
+	var gold := GData.wave_gold(wave)
+	for p in players:
+		p["gold"] += gold + bonus
+		p["call"] = false
+	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": "", "early": bonus}
+	fx.append({"k": "early", "n": bonus})
+	wave += 1
+	_start_wave()
 
 
 func fast_votes() -> int:
@@ -310,6 +352,7 @@ func _start_wave() -> void:
 	for p in players:
 		p["ready"] = false
 		p["used"] = false
+		p["call"] = false
 	version += 1
 
 
@@ -504,6 +547,7 @@ func _finish_wave() -> void:
 	var gold := GData.wave_gold(wave)
 	for p in players:
 		p["gold"] += gold
+		p["call"] = false
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
 	if wave >= GData.LAST_WAVE:
 		cleared = true
@@ -552,10 +596,11 @@ func to_data() -> Dictionary:
 		var t: Dictionary = towers[id]
 		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"]])
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": draft, "sm": summary,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks, "sp": speed}
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size()}
 
 
 func load_data(d: Dictionary) -> void:
+	is_copy = true
 	phase = str(d["ph"])
 	wave = int(d["w"])
 	hp = int(d["hp"])
@@ -588,6 +633,7 @@ func load_data(d: Dictionary) -> void:
 		gate_dmg.append(int(v))
 	leaks = d["lk"]
 	speed = int(d.get("sp", 1))
+	_can_call = bool(d.get("cc", false))
 
 
 func enemies_data() -> Array:

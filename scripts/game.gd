@@ -149,6 +149,7 @@ var cfg_btns := {}
 var menu_items: Array = []
 var code_go: Button
 var speed_btns: Array = []
+var call_btn: Button
 var _none := StyleBoxEmpty.new()
 
 
@@ -402,6 +403,9 @@ func _build_hud() -> void:
 	speed_btns.append(_btn(hud, Rect2(1141, 650, 74, 40), "2배", _on_speed.bind(true), "sec", 13))
 	for b in speed_btns:
 		b.toggle_mode = true
+	call_btn = _btn(hud, Rect2(1046, 560, 180, 44), "", _on_call, "pri", 13)
+	call_btn.toggle_mode = true
+	call_btn.tooltip_text = "적이 다 나왔을 때 다음 웨이브를 바로 불러요. 남은 적이 많을수록 보너스 골드가 커요 (전원 동의 · N)"
 	var keys_order := ["first", "strong", "near"]
 	for i in 3:
 		prio_btns[keys_order[i]] = _btn(hud, Rect2(), PRIO[keys_order[i]], _on_prio.bind(keys_order[i]), "sec", 12)
@@ -756,6 +760,14 @@ func _settings_rows() -> Array:
 	return []
 
 
+func _on_call() -> void:
+	if s and s.m and s.m.can_call():
+		var me: Dictionary = s.m.players[s.seat]
+		s.command({"op": "call", "v": not bool(me.get("call", false))})
+	if call_btn:
+		call_btn.set_pressed_no_signal(false)
+
+
 func _on_speed(fast: bool) -> void:
 	if s and s.m:
 		s.command({"op": "speed", "v": fast})
@@ -1077,6 +1089,8 @@ func _take_fx() -> void:
 				_shake = 1.0
 				_fxs.append({"k": "hit", "n": int(f["n"]), "t": 1.0, "life": 1.0})
 				_fxs.append({"k": "gate", "e": int(f.get("e", 0)), "n": int(f["n"]), "t": 1.4, "life": 1.4})
+			"early":
+				_say("다음 웨이브를 일찍 불렀어요 · 전원 보너스 +%dG" % int(f["n"]))
 			"kill":
 				_fxs.append({"k": "kill", "a": Vector2(f["x"], f["y"]), "big": bool(f.get("big", false)), "t": 0.45, "life": 0.45})
 			"num":
@@ -1182,6 +1196,14 @@ func _update_hud() -> void:
 		_style(ready_btn, "sec" if r else "pri")
 	for b in speed_btns:
 		b.visible = m.phase == "combat"
+	call_btn.visible = m.can_call()
+	if call_btn.visible:
+		var mine := bool(m.players[s.seat].get("call", false))
+		var alive := int(m.enemies.size())
+		call_btn.text = "일찍 부르기 +%dG  %d/%d" % [GData.early_bonus(alive), m.call_votes(), m.online_count()]
+		if mine:
+			call_btn.text = "부르기 취소  %d/%d" % [m.call_votes(), m.online_count()]
+		_style(call_btn, "sec" if mine else "pri")
 	if m.phase == "combat":
 		var votes := m.fast_votes()
 		speed_btns[1].text = "2배" if m.speed == 2 else "2배 %d/%d" % [votes, m.online_count()]
@@ -1462,6 +1484,7 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 				_on_confirm()
 		KEY_Q: _key_mode("ability", ability_btn)
 		KEY_SPACE: _on_ready()
+		KEY_N: _on_call()
 
 
 func _key_mode(v: String, b: Button) -> void:
@@ -2406,6 +2429,8 @@ func _summary_text(m: GMatch) -> String:
 	var text := "웨이브 %d 결과 · " % int(sm.get("wave", 0))
 	text += ("새어 나간 적 %d (%s)" % [total, " · ".join(parts)]) if total > 0 else "모두 막았어요"
 	text += " · +%dG" % int(sm.get("gold", 0))
+	if int(sm.get("early", 0)) > 0:
+		text += " · 일찍 부르기 +%dG" % int(sm["early"])
 	if str(sm.get("reward", "")) != "":
 		text += " · 보상: %s" % GData.REWARDS[str(sm["reward"])]
 	return text

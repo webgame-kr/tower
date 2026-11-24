@@ -64,4 +64,19 @@ func _run() -> void:
 	while m.phase == "combat":
 		m.step()
 	await _save("ev_reward")
+	for vk in 2:
+		m.apply(vk, {"op": "vote", "v": "gold"})
+	GBot.play_prep(m, 0)
+	GBot.play_prep(m, 1)
+	m.apply(0, {"op": "ready", "v": true})
+	m.apply(1, {"op": "ready", "v": true})
+	guard = 0
+	while not m.can_call() and guard < 6000:
+		m.step()
+		guard += 1
+	await _save("ev_call")
+	play.command({"op": "call", "v": true})
+	for _i in 3:
+		play.tick(0.05)
+	await _save("ev_called")
 	quit()

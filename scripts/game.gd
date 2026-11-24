@@ -683,27 +683,30 @@ func _place_pause() -> void:
 	for k in cfg_btns:
 		cfg_btns[k].visible = _panel != "" and (settings or k == "close")
 	var rows := _settings_rows() if settings else []
+	var want := {}
 	for b in font_btns:
-		b.visible = false
+		want[b] = false
 	for k in toggle_btns:
-		toggle_btns[k].visible = false
-	shake_btn.visible = false
+		want[toggle_btns[k]] = false
+	want[shake_btn] = false
 	for i in rows.size():
 		var y := 218.0 + i * 64.0      # 줄 가운데
 		var row: Array = rows[i]
 		if row[0] == "font":
 			for j in font_btns.size():
-				font_btns[j].visible = true
+				want[font_btns[j]] = true
 				font_btns[j].position = Vector2(668 + j * 72, y - 15)
 				font_btns[j].set_pressed_no_signal(int(_cfg_draft.get("font", 100)) == FONT_STEPS[j])
 		elif row[0] == "toggle":
 			var b: Button = toggle_btns[row[1]]
-			b.visible = true
+			want[b] = true
 			b.position = Vector2(902, y - 12)
 			b.size = Vector2(44, 24)
 		elif row[0] == "slider":
-			shake_btn.visible = true
+			want[shake_btn] = true
 			shake_btn.position = Vector2(680, y - 13)
+	for b in want:
+		_vis(b, want[b])
 	for i in mute_btns.size():
 		var b: Button = mute_btns[i]
 		b.visible = _panel == "mute" and s != null and i < _player_count() and i != s.seat
@@ -1453,6 +1456,7 @@ func _update_hud() -> void:
 
 
 func _update_inspector(prep: bool) -> void:
+	# 보이기 여부는 한 번만 정해서 넣는다 (숨겼다 다시 보이면 누르던 클릭이 취소된다)
 	var m := s.m
 	if selected >= 0 and not m.towers.has(selected):
 		selected = -1
@@ -1460,53 +1464,48 @@ func _update_inspector(prep: bool) -> void:
 	if t.is_empty() or int(t["lv"]) != 2:
 		_branch_pick = false
 	var mine := not t.is_empty() and int(t["owner"]) == s.seat
-	for k in prio_btns:
-		prio_btns[k].visible = mine
+	var show_prio: bool = mine and not (GMatch.is_trap(t) or t["type"] == "signal") if not t.is_empty() else false
+	var show_up := false
+	var show_ab := false
+	var show_fix := false
+	var show_sell := mine and prep
+	if not t.is_empty():
+		_inspector_layout(_inspector_rect(m, t), mine, prep, int(t["lv"]))      # 첫 클릭이 버튼에 닿게 자리를 먼저
 		if mine:
-			prio_btns[k].set_pressed_no_signal(k == t["prio"])
-	up_btn.visible = false
-	a_btn.visible = false
-	b_btn.visible = false
-	fix_btn.visible = false
-	move_btn.visible = mine and prep
-	sell_btn.visible = mine and prep
-	if not t.is_empty() and (GMatch.is_trap(t) or t["type"] == "signal"):
-		for k in prio_btns:
-			prio_btns[k].visible = false
-	if t.is_empty():
-		return
-	# 버튼 자리를 그리기 전에 정해 둬야 첫 클릭이 버튼에 닿는다
-	_inspector_layout(_inspector_rect(m, t), mine, prep, int(t["lv"]))
-	if not (mine and prep):
-		return
-	var d: Dictionary = GData.TOWERS[t["type"]]
-	var gold: int = m.players[s.seat]["gold"]
-	var free := int(m.players[s.seat].get("free_up", 0)) > 0
-	var lv := int(t["lv"])
-	if lv == 1:
-		up_btn.visible = true
-		up_btn.text = ""
-		up_btn.disabled = not free and gold < int(d["up"][0])
-	elif lv == 2:
-		up_btn.visible = true
-		up_btn.text = ""
-		up_btn.disabled = not free and gold < int(d["up"][1])
-		a_btn.visible = _branch_pick
-		b_btn.visible = _branch_pick
-		a_btn.text = ""
-		b_btn.text = ""
-		a_btn.disabled = up_btn.disabled
-		b_btn.disabled = up_btn.disabled
-		if _branch_pick:
 			for k in prio_btns:
-				prio_btns[k].visible = false
-	sell_btn.text = ""
-	if GMatch.is_trap(t):
-		var full := int(GData.tower_stats(t["type"], lv, str(t["branch"]))["uses"])
-		fix_btn.visible = int(t["uses"]) < full
-		fix_btn.disabled = int(m.players[s.seat]["mat"]) < GData.TRAP_REPAIR
-		fix_btn.position = sell_btn.position + Vector2(0, -78)
-		fix_btn.size = Vector2(_ly()["insp"].size.x - 16, 32)
+				prio_btns[k].set_pressed_no_signal(k == t["prio"])
+	if not t.is_empty() and mine and prep:
+		var d: Dictionary = GData.TOWERS[t["type"]]
+		var gold: int = m.players[s.seat]["gold"]
+		var free := int(m.players[s.seat].get("free_up", 0)) > 0
+		var lv := int(t["lv"])
+		if lv <= 2:
+			show_up = true
+			up_btn.disabled = not free and gold < int(d["up"][lv - 1])
+		if lv == 2 and _branch_pick:
+			show_ab = true
+			show_prio = false
+			a_btn.disabled = up_btn.disabled
+			b_btn.disabled = up_btn.disabled
+		if GMatch.is_trap(t):
+			var full := int(GData.tower_stats(t["type"], lv, str(t["branch"]))["uses"])
+			show_fix = int(t["uses"]) < full
+			fix_btn.disabled = int(m.players[s.seat]["mat"]) < GData.TRAP_REPAIR
+			fix_btn.position = sell_btn.position + Vector2(0, -40)
+			fix_btn.size = Vector2(_ly()["insp"].size.x - 16, 32)
+	for k in prio_btns:
+		_vis(prio_btns[k], show_prio)
+	_vis(up_btn, show_up)
+	_vis(a_btn, show_ab)
+	_vis(b_btn, show_ab)
+	_vis(fix_btn, show_fix)
+	_vis(sell_btn, show_sell)
+	_vis(move_btn, false)
+
+
+func _vis(b: Control, v: bool) -> void:
+	if b.visible != v:
+		b.visible = v
 
 
 func _side_top(m: GMatch) -> float:
@@ -1566,7 +1565,8 @@ func _skip_tutorial() -> void:
 
 ## 첫 판 안내: 건설 → 길 바꾸기 → 긴급 냉각
 func _update_tutorial(m: GMatch) -> void:
-	tut_skip.visible = _tut >= 0 and not _paused
+	if _tut < 0 or _paused:
+		_vis(tut_skip, false)
 	if _tut < 0:
 		return
 	var me: Dictionary = m.players[s.seat]
@@ -3477,7 +3477,7 @@ func _ly() -> Dictionary:
 	L["team"] = Rect2(rx, top, rw, 44 + n * 26)
 	var ry := (L["team"] as Rect2).end.y + 10
 	L["side"] = Rect2(rx, ry, rw, 160)
-	L["insp"] = Rect2(rx, ry, rw, 272)
+	L["insp"] = Rect2(rx, ry, rw, 300)
 	L["call"] = Rect2(rx, (L["chat_min"] as Rect2).position.y - 8 if L["four"] else 566.0, rw, 40)
 	L["hint"] = (L["bar"] as Rect2).position.y - 44
 	return L
@@ -3791,8 +3791,8 @@ func _draw_hint(m: GMatch) -> void:
 
 
 func _draw_tutorial(m: GMatch) -> bool:
-	tut_skip.visible = false
 	if _tut < 0 or m.phase == "reward":
+		_vis(tut_skip, false)
 		return false
 	var steps := [["1/3", "공구함에서 포탑을 골라 빈 칸에 지어요"],
 		["2/3", "Z 로 길 위 칸에서 끌어 길을 다시 그려요"],
@@ -3804,7 +3804,7 @@ func _draw_tutorial(m: GMatch) -> bool:
 	_tx(Rect2(r.position + Vector2(14, 0), Vector2(40, 36)), str(row[0]), T.LABEL, AMBER)
 	_tx(Rect2(r.position + Vector2(64, 0), Vector2(w, 36)), str(row[1]), T.LABEL, INK)
 	_tx(Rect2(r.position, Vector2(r.size.x - 14, 36)), "ESC 건너뛰기", T.LABEL, SUB, 2)
-	tut_skip.visible = true
+	_vis(tut_skip, true)
 	tut_skip.position = Vector2(r.end.x - _sz("ESC 건너뛰기", T.LABEL).x - 20, r.position.y)
 	tut_skip.size = Vector2(_sz("ESC 건너뛰기", T.LABEL).x + 20, 36)
 	return true
@@ -4064,11 +4064,10 @@ func _inspector_layout(r: Rect2, mine: bool, prep: bool, lv: int) -> void:
 		prio_btns[keys[i]].position = Vector2(r.position.x + 8 + i * (pw + 4), py)
 		prio_btns[keys[i]].size = Vector2(pw, 32)
 	var half := floorf((w - gap) * 0.5 / 2.0) * 2.0
-	a_btn.position = Vector2(r.position.x + 8, py)
-	a_btn.size = Vector2(half, 88)
-	b_btn.position = Vector2(r.position.x + 8 + half + gap, py)
-	b_btn.size = Vector2(w - half - gap, 88)
-	move_btn.visible = false
+	a_btn.position = Vector2(r.position.x + 8, bottom - 92)
+	a_btn.size = Vector2(half, 84)
+	b_btn.position = Vector2(r.position.x + 8 + half + gap, bottom - 92)
+	b_btn.size = Vector2(w - half - gap, 84)
 
 
 func _draw_wave_info(m: GMatch, top: float) -> void:

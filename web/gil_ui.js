@@ -11,9 +11,9 @@
     el.autocomplete = "off";
     el.spellcheck = false;
     el.style.cssText = "position:fixed;z-index:20;box-sizing:border-box;height:34px;padding:0 12px;border-radius:4px;" +
-      "border:1px solid #4A5258;background:#121518;color:#E6E2D8;font:14px 'Malgun Gothic','Apple SD Gothic Neo',sans-serif;outline:none;display:none";
-    el.addEventListener("focus", function () { el.style.borderColor = "#D9A21B"; });
-    el.addEventListener("blur", function () { el.style.borderColor = "#4A5258"; });
+      "border:1px solid #405068;background:#1c1e22;color:#eff5ff;font:14px 'Malgun Gothic','Apple SD Gothic Neo',sans-serif;outline:none;display:none";
+    el.addEventListener("focus", function () { el.style.borderColor = "#f4bb60"; });
+    el.addEventListener("blur", function () { el.style.borderColor = "#405068"; });
     el.addEventListener("keydown", function (e) {
       e.stopPropagation();
       // 한글 조합을 확정하는 Enter 는 전송이 아니다
@@ -62,6 +62,8 @@
     take: function (id) { var a = sent[id] || []; sent[id] = []; return JSON.stringify(a); },
     typing: function () { var a = document.activeElement; return !!a && a.tagName === "INPUT"; },
     saved: function () { try { return localStorage.getItem("gil_name") || ""; } catch (e) { return ""; } },
+    load_key: function (k) { try { return localStorage.getItem("gil_" + k) || ""; } catch (e) { return ""; } },
+    save_key: function (k, v) { try { localStorage.setItem("gil_" + k, v); } catch (e) {} },
     save: function (v) { try { localStorage.setItem("gil_name", v); } catch (e) {} }
   };
 })();

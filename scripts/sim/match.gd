@@ -19,6 +19,7 @@ var version := 0             # 건물·골드 등 구조가 바뀔 때마다 증
 var fx: Array = []           # 그리기용 일회성 효과
 var gate_dmg: Array = [0, 0] # 입구별 성 피해
 var leaks: Dictionary = {}   # 성에 도착한 적 종류별 수
+var speed := 1               # 전투 배속 (2배는 접속 중인 전원 동의)
 
 var _queue: Array = []
 var _wave_t := 0.0
@@ -60,6 +61,8 @@ func apply(seat: int, c: Dictionary) -> String:
 		return _ability(seat, c)
 	if op == "prio":
 		return _prio(seat, c)
+	if op == "speed":
+		return _speed(seat, bool(c.get("v", false)))
 	if phase != "prep":
 		return "준비 단계에서만 할 수 있어요"
 	var err := ""
@@ -77,6 +80,35 @@ func apply(seat: int, c: Dictionary) -> String:
 		if op != "draft":
 			players[seat]["ready"] = false
 	return err
+
+
+## 2배는 전원이 동의해야 켜지고, 누구든 1배로 되돌릴 수 있다
+func _speed(seat: int, want_fast: bool) -> String:
+	players[seat]["fast"] = want_fast
+	if want_fast:
+		speed = 2 if fast_votes() >= online_count() else speed
+	else:
+		speed = 1
+		for p in players:
+			p["fast"] = false
+	version += 1
+	return ""
+
+
+func fast_votes() -> int:
+	var n := 0
+	for p in players:
+		if p["online"] and bool(p.get("fast", false)):
+			n += 1
+	return n
+
+
+func online_count() -> int:
+	var n := 0
+	for p in players:
+		if p["online"]:
+			n += 1
+	return n
 
 
 func _build(seat: int, c: Dictionary) -> String:
@@ -458,7 +490,7 @@ func to_data() -> Dictionary:
 		var t: Dictionary = towers[id]
 		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"]])
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "ed": edits_left, "ro": road_owner, "dr": draft,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks}
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks, "sp": speed}
 
 
 func load_data(d: Dictionary) -> void:
@@ -490,6 +522,7 @@ func load_data(d: Dictionary) -> void:
 	for v in d["gd"]:
 		gate_dmg.append(int(v))
 	leaks = d["lk"]
+	speed = int(d.get("sp", 1))
 
 
 func enemies_data() -> Array:

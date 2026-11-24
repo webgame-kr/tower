@@ -174,7 +174,7 @@ func _host_tick(delta: float) -> void:
 			GBot.play_prep(m, 1)
 		elif not m.players[1]["ready"]:
 			m.apply(1, {"op": "ready", "v": true})
-	_acc = minf(_acc + delta, GData.TICK * 8)
+	_acc = minf(_acc + delta * m.speed, GData.TICK * 8 * m.speed)
 	while _acc >= GData.TICK:
 		_acc -= GData.TICK
 		m.step()

@@ -108,6 +108,14 @@ func _rules() -> void:
 			owners.append(m.road_owner)
 			m._finish_wave()
 		ok(owners[n] == owners[0] and _unique(owners.slice(0, n)) == n, "%d인 길 담당 순환" % n)
+	var fast := GMatch.new(["A", "B", "C"])
+	fast.apply(0, {"op": "speed", "v": true})
+	fast.apply(1, {"op": "speed", "v": true})
+	ok(fast.speed == 1 and fast.fast_votes() == 2, "2배는 일부 동의로 켜지지 않음")
+	fast.apply(2, {"op": "speed", "v": true})
+	ok(fast.speed == 2, "전원 동의로 2배")
+	fast.apply(1, {"op": "speed", "v": false})
+	ok(fast.speed == 1 and fast.fast_votes() == 0, "누구든 1배로 복귀")
 	var four := GMatch.new(["A", "B", "C", "D"])
 	var spots := 0
 	for i in four.board.paths[2].size():

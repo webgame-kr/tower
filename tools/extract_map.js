@@ -7,9 +7,10 @@ const fs = require("fs"), path = require("path"), { spawn } = require("child_pro
 const [, , P, TMP, OUT] = process.argv;
 const EDGE = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 const THEMES = [["grass", 0, null], ["snow", 1, [49, 78]], ["sand", 3, [44, 44, 49, 49]], ["lava", 5, [69, 87]], ["ghost", 7, [370, 372]]];
-// 시안 좌표: 칸 15, 플레이 영역 시작 (75.5, 43). 게임 화면: 칸 24, 틀 안 여백 (81, 54)
-const VIEW = `${75.5 - 81 / 1.6} ${43 - 54 / 1.6} ${810 / 1.6} ${540 / 1.6}`;
-const W = 1215, H = 810;
+// 시안 좌표: 칸 15, 플레이 영역 시작 (75.5, 43). 게임 화면: 칸 28, 플레이 시작 (262, 100), 전체 1280x720
+const K = 28 / 15;
+const VIEW = `${75.5 - 262 / K} ${43 - 100 / K} ${1280 / K} ${720 / K}`;
+const W = 1600, H = 900;
 
 function children(x) {
   const out = [];
@@ -68,7 +69,7 @@ function shot(html, png, n, w = W, h = H) {
     fs.writeFileSync(gateHtml, `<!doctype html><meta charset=utf-8><style>html,body{margin:0;background:transparent;width:220px;height:220px;overflow:hidden}</style><svg xmlns="http://www.w3.org/2000/svg" viewBox="44 143 55 55" width="220" height="220">${kids.slice(from, to).join("")}</svg>`);
     await shot(gateHtml, path.join(OUT, `${id}_gate3.png`), id + "gate", 220, 220);
     if (id === "sand") console.log("sand zone", attr(kids[44], "cx"), attr(kids[44], "cy"), attr(kids[44], "r"));
-    for (const [suffix, body] of [["base", kids.slice(0, grid).join("")], ["over", over.join("")]]) {
+    for (const [suffix, body] of [["base", `<svg x="0" y="0" width="556" height="350" viewBox="0 0 556 350">${kids.slice(0, grid).join("")}</svg>`], ["over", over.join("")]]) {
       const html = path.join(TMP, `${id}_${suffix}.html`);
       fs.writeFileSync(html, page(body));
       const ok = await shot(html, path.join(OUT, `${id}_${suffix}.png`), id + suffix);

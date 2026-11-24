@@ -15,6 +15,7 @@ func _init() -> void:
 	if args.size() > 2:
 		seeds = Array(args[2].split(",")).map(func(v): return int(v))
 	var only := args[3] if args.size() > 3 else ""      # blind / smart 하나만
+	roads = not (args.size() > 4 and args[4] == "noroad")      # 4인은 길 탐색이 무거워 끌 수 있다
 	print("hp_mul ", GData.hp_mul)
 	for n in ns:
 		var a := []
@@ -28,6 +29,9 @@ func _init() -> void:
 				b.append(_run(n, sd))
 		print("%d인 | 반응 안 씀: %s | 반응 씀: %s" % [n, " / ".join(a), " / ".join(b)])
 	quit()
+
+
+var roads := true
 
 
 func _run(players: int, sd: int) -> String:
@@ -55,7 +59,7 @@ func _run(players: int, sd: int) -> String:
 					m.players[s]["picked"] = true
 			for s in players:
 				if m.phase == "prep":
-					GBot.play_prep(m, s, true)
+					GBot.play_prep(m, s, roads)
 			for s in players:
 				if m.phase == "prep":
 					m.apply(s, {"op": "ready", "v": true})

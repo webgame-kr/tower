@@ -170,6 +170,10 @@ func _online() -> void:
 	pump()
 	for g in guests:
 		ok(g.state == "game" and g.m.board.paths.size() == 4 and g.m.players.size() == 4, "손님에게 4인 경기 전달")
+	for i in 4:
+		host.m.players[i]["kit"] = ["gun", "cannon", "cold", "spike"]      # 카드는 무작위라 공구함을 정해 둔다
+	host.m.version += 1
+	pump()
 	var spots := [Vector2i(5, 2), Vector2i(19, 2), Vector2i(5, 12)]
 	for i in guests.size():
 		guests[i].command({"op": "build", "type": "gun", "x": spots[i].x, "y": spots[i].y})

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 for t in run_tests net_tests four_tests; do
   out=$("$G" --headless --path . -s "res://tests/$t.gd" 2>&1) || { echo "$out"; exit 1; }
   echo "$out" | grep -E 'passed'
-  if echo "$out" | grep -q "SCRIPT ERROR"; then echo "$out"; exit 1; fi
+  if echo "$out" | grep -qE "SCRIPT ERROR|^FAIL"; then echo "$out" | grep -E "SCRIPT ERROR|^FAIL"; exit 1; fi
 done
 smoke=$(timeout 25 "$G" --headless --path . --quit-after 30 2>&1 || true)
 if echo "$smoke" | grep -qE 'SCRIPT ERROR|Parse Error'; then echo "$smoke" | grep -E -A1 'SCRIPT ERROR|Parse Error'; exit 1; fi

@@ -45,8 +45,9 @@ const OWNER := [Color("E0533D"), Color("3D6FD1"), Color("E9B935"), Color("38A672
 const OWNER_TEXT := [Color("FF8A78"), Color("7FA6F0"), Color("E9B935"), Color("5FCB97")]
 const MARK := ["●", "▲", "■", "◆"]
 const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "magnet": 3, "oil": 4, "flame": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9}
-const TW := Vector2(120, 168)              # 포탑 그림 한 칸: 칸(0..100) 기준 왼쪽 10, 위로 64
-const LOOK_SCALE := [0.551, 0.551, 0.551, 0.551, 0.551, 0.798]   # 적 그림 칸: 일반병·돌격병·중장갑·떼거리·치유사·보스 (칸 38px 기준)
+const TW := Vector2(34, 50)                # 포탑 그림 한 칸 (픽셀): 아래 19줄이 그 칸
+const EW := Vector2(44, 40)                # 적 그림 한 칸 (픽셀), 발은 (22, 38)
+const TILE := 19.0                         # 픽셀 아트 타일 (화면 칸 = 19 x 배율)
 const PRIO := {"first": "앞선 적", "strong": "강한 적", "near": "가까운 적"}
 const PING_ORDER := ["look", "danger", "build", "road", "mine"]
 const PING_COL := [Color("3F9BD6"), Color("D2452F"), Color("E9B935"), Color("C9A15F"), Color("38A672")]
@@ -184,6 +185,7 @@ func _ready() -> void:
 	add_child(net)
 	web = OS.has_feature("web") and net.available
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST      # 픽셀 아트는 번지지 않게
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	stage = Control.new()
 	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1854,10 +1856,12 @@ func _mk(t: Dictionary) -> int:
 
 
 ## 지도 위 포탑: 칸 왼쪽 위(cell_pos)에 기초를 두고 위로 솟는다 (3/4 시점)
+## 지도 위 포탑: 그림 아래 19줄이 칸, 위로 솟는다
 func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Vector2, cell_px: float, tint := Color.WHITE) -> void:
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
-	var u := cell_px / 100.0
-	draw_texture_rect_region(TEX_TOWERS, Rect2(cell_pos + Vector2(-10, -64) * u, TW * u), _tower_src(type, mk, col), tint)
+	var k := cell_px / TILE
+	var at := cell_pos + Vector2(cell_px * 0.5 - TW.x * 0.5 * k, cell_px - TW.y * k)
+	draw_texture_rect_region(TEX_TOWERS, Rect2(at.round(), TW * k), _tower_src(type, mk, col), tint)
 
 
 func _tower_src(type: String, mk: int, col: int) -> Rect2:
@@ -1877,14 +1881,14 @@ func _enemy_icon(type: String, r: Rect2, tint := Color.WHITE) -> void:
 	var t := tint
 	if str(look[1]) != "":
 		t = tint * Color.WHITE.lerp(Color(str(look[1])), 0.55)
-	draw_texture_rect_region(TEX_ENEMIES, r, Rect2(int(look[0]) * 128, 0, 128, 128), t)
+	var k := minf(r.size.x / EW.x, r.size.y / EW.y)
+	var size := EW * k
+	draw_texture_rect_region(TEX_ENEMIES, Rect2(r.position + (r.size - size) * 0.5, size), Rect2(int(look[0]) * EW.x, 0, EW.x, EW.y), t)
 
 
-## 적 그림 한 칸(128)의 화면 크기
+## 적 그림 한 칸의 화면 배율
 func _enemy_px(type: String) -> float:
-	var look: Array = GData.ENEMIES[type]["look"]
-	var k := 1.0 if type != "mini" else 0.7
-	return 128.0 * float(LOOK_SCALE[int(look[0])]) * k * CELL / 38.0
+	return (CELL / TILE) * (0.75 if type == "mini" else 1.0)
 
 
 func _gate_badge(center: Vector2, e: int) -> void:
@@ -1913,8 +1917,10 @@ func _p(g: Vector2) -> Vector2:
 	return MAP + g * CELL + Vector2(sin(_tick * 60.0), cos(_tick * 53.0)) * _shake * 2.0 * float(cfg["shake"]) / 30.0
 
 
+## 지도 그림: 픽셀 원본을 칸 배율(칸/19)대로 키운다
 func _frame_rect() -> Rect2:
-	return Rect2(_p(Vector2.ZERO) - MAP, FRAME.size)
+	var tex := _tex(_theme, "base")
+	return Rect2(_p(Vector2.ZERO) - MAP, tex.get_size() * (CELL / TILE))
 
 
 func _draw_ground(theme := -1) -> void:
@@ -2059,7 +2065,7 @@ func _zone_tag(center: Vector2, text: String, edge: Color) -> void:
 
 
 func _draw_road(path_in: Array, theme := -1, broken := false) -> void:
-	var layers: Array = GData.THEMES[_theme if theme < 0 else theme]["road"]
+	var px: Array = GData.THEMES[_theme if theme < 0 else theme]["px"]
 	var path := path_in
 	if not path_in.is_empty():      # 입구는 맵 밖에서 들어오는 것처럼 가장자리 너머로 잇는다
 		var g: Vector2i = path_in[0]
@@ -2067,23 +2073,44 @@ func _draw_road(path_in: Array, theme := -1, broken := false) -> void:
 		if out == Vector2i.ZERO:
 			out = Vector2i(0, -1 if g.y == 0 else (1 if g.y == GData.H - 1 else 0))
 		if out != Vector2i.ZERO:
-			path = [g + out * 2, g + out] + path_in
-	for layer in layers:
-		var col := Color(str(layer[0]), float(layer[3]))
-		if broken:
-			col = col.lerp(Color("B83A2B"), 0.62)
-		var w := CELL * float(layer[1])
-		var sh := Vector2(2, 3) if str(layer[0]) == "#000000" else Vector2.ZERO      # 그림자는 오른쪽 아래로
-		for i in range(1, path.size()):
-			var a := _p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)) + sh
-			var b := _p(Vector2(path[i]) + Vector2(0.5, 0.5)) + sh
-			if int(layer[2]) == 1:
-				draw_dashed_line(a, b, col, w, 5.0)
-			else:
-				draw_line(a, b, col, w)
-		if int(layer[2]) == 0 and w > 3.0:
-			for c in path:
-				draw_circle(_p(Vector2(c) + Vector2(0.5, 0.5)) + sh, w * 0.5, col)
+			path = [g + out * 3, g + out * 2, g + out] + path_in
+	var on := {}
+	for c in path:
+		on[c] = true
+	var p := CELL / TILE      # 픽셀 한 칸
+	var road_a := Color(str(px[0]))
+	var road_b := Color(str(px[1]))
+	var paint := Color(str(px[2]))
+	var curb := Color(str(px[3]))
+	if broken:
+		road_a = road_a.lerp(Color("B83A2B"), 0.45)
+		road_b = road_b.lerp(Color("B83A2B"), 0.45)
+	for c in path:
+		var a := _p(Vector2(c)).round()
+		var r := Rect2(a, Vector2(CELL, CELL))
+		draw_rect(r, road_b)
+		draw_rect(Rect2(a, Vector2(CELL, p)), road_a)      # 판 이음매
+		draw_rect(Rect2(a, Vector2(p, CELL)), road_a)
+		for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			if on.has(c + d):
+				continue
+			var edge: Rect2
+			var line: Rect2
+			match d:
+				Vector2i.LEFT:
+					edge = Rect2(a, Vector2(p, CELL))
+					line = Rect2(a + Vector2(p, 0), Vector2(p, CELL))
+				Vector2i.RIGHT:
+					edge = Rect2(a + Vector2(CELL - p, 0), Vector2(p, CELL))
+					line = Rect2(a + Vector2(CELL - 2 * p, 0), Vector2(p, CELL))
+				Vector2i.UP:
+					edge = Rect2(a, Vector2(CELL, p))
+					line = Rect2(a + Vector2(0, p), Vector2(CELL, p))
+				_:
+					edge = Rect2(a + Vector2(0, CELL - p), Vector2(CELL, p))
+					line = Rect2(a + Vector2(0, CELL - 2 * p), Vector2(CELL, p))
+			draw_rect(line, paint)
+			draw_rect(edge, curb)
 
 
 func _draw_chevrons(path: Array, col := Color(0.1, 0.08, 0.05, 0.8)) -> void:
@@ -2410,10 +2437,9 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 	var d: float = _disp.get(int(en["id"]), float(en["dist"]))
 	var pos := Board.pos_on(path, d)
 	var dir := Board.pos_on(path, d + 0.12) - pos
-	var foot := _p(pos) + Vector2(0, CELL * 0.28)
-	var frame := _enemy_px(en["type"])
-	var unit := frame / 128.0
-	var size_px := 100.0 * unit
+	var foot := _p(pos) + Vector2(0, CELL * 0.3)
+	var unit := _enemy_px(en["type"])
+	var size_px := 26.0 * unit
 	var center := foot + Vector2(0, -size_px * 0.42)
 	var ghost := m.is_ghost(en)
 	var look: Array = GData.ENEMIES[en["type"]]["look"]
@@ -2423,9 +2449,12 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 	if absf(dir.x) > 0.02:
 		_face[int(en["id"])] = -1.0 if dir.x < 0.0 else 1.0
 	var face: float = _face.get(int(en["id"]), 1.0)
-	var origin := foot - Vector2(66, 108) * unit * Vector2(face, 1.0)
+	var origin := (foot - Vector2(22, 38) * unit * Vector2(face, 1.0)).round()
 	draw_set_transform(_off + origin, 0.0, Vector2(face, 1.0))
-	_enemy_icon(en["type"], Rect2(Vector2.ZERO, Vector2(frame, frame)), Color(0.72, 1, 0.92, 0.42) if ghost else Color.WHITE)
+	var tint := Color(0.72, 1, 0.92, 0.42) if ghost else Color.WHITE
+	if str(look[1]) != "":
+		tint = tint * Color.WHITE.lerp(Color(str(look[1])), 0.55)
+	draw_texture_rect_region(TEX_ENEMIES, Rect2(Vector2.ZERO, EW * unit), Rect2(int(look[0]) * EW.x, 0, EW.x, EW.y), tint)
 	draw_set_transform(_off)
 	if ghost:
 		_dash_ring(center, size_px * 0.52, Color("7FE8D0"), 1.6)

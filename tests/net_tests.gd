@@ -55,6 +55,14 @@ func _init() -> void:
 	b.inbox.append({"from": "host", "data": {"t": "_open"}})
 	pump(h, c)
 	ok(c.seat == 1 and h.seats.size() == 2, "손님 입장")
+	ok(h.start_match() != "", "모두 준비 전에는 시작 불가")
+	c.set_seat({"col": 0})
+	pump(h, c)
+	ok(int(h.seats[1]["col"]) == 1, "이미 쓰인 색은 고를 수 없음")
+	c.set_seat({"col": 3, "name": "새이름", "ready": true})
+	h.set_seat({"ready": true})
+	pump(h, c)
+	ok(int(c.seats[1]["col"]) == 3 and c.seats[1]["name"] == "새이름", "로비 색·이름 반영")
 	ok(h.start_match() == "", "경기 시작")
 	pump(h, c)
 	ok(c.state == "game" and c.m != null, "손님에게 경기 전달")
@@ -85,7 +93,7 @@ func _init() -> void:
 			limited = true
 	ok(limited, "연속 전송 제한")
 
-	c.command({"op": "ping", "kind": "danger", "x": 3.5, "y": 3.5})
+	c.command({"op": "ping", "kind": "danger", "x": 3.5, "y": 8.5})
 	pump(h, c)
 	ok(c.pings.size() == 1 and h.pings.size() == 1, "핑 양쪽 표시")
 	ok(str(c.chat[-1]["text"]).contains("1번 입구 길"), "핑이 위치와 함께 채팅에 기록")
@@ -109,6 +117,11 @@ func _init() -> void:
 	pump(h, c2, 60)
 	ok(h.m.phase == "combat" and c2.m.phase == "combat", "전원 준비로 전투 시작")
 	ok(c2.m.enemies.size() > 0, "손님에게 적 표시")
+
+	h.m.phase = "over"
+	h.to_lobby()
+	pump(h, c2)
+	ok(h.m == null and c2.m == null and c2.state == "lobby", "결과 화면에서 로비로 복귀")
 
 	var a2 := Wire.new()
 	var b2 := Wire.new()

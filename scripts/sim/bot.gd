@@ -5,6 +5,7 @@ extends RefCounted
 
 ## 준비 단계에서 할 일을 모두 하고 준비 완료한다.
 static func play_prep(m: GMatch, seat: int, use_roads := true) -> void:
+	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
 	if use_roads and m.road_owner == seat:
 		while m.edits_left > 0:
 			var e := best_road(m)
@@ -12,7 +13,6 @@ static func play_prep(m: GMatch, seat: int, use_roads := true) -> void:
 				break
 			if m.apply(seat, {"op": "edit", "e": e["e"], "i": e["i"], "kind": e["kind"], "side": e["side"]}) != "":
 				break
-	_spend(m, seat)
 	m.apply(seat, {"op": "ready", "v": true})
 
 

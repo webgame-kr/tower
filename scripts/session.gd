@@ -50,9 +50,10 @@ func open_host(practice := false) -> void:
 	solo = practice
 	seat = 0
 	state = "lobby"
-	seats = [{"peer": "", "token": my_token, "name": my_name, "online": true}]
+	seats = [{"peer": "", "token": my_token, "name": my_name, "online": true, "col": 0, "ready": false}]
 	if practice:
-		seats.append({"peer": "", "token": "bot", "name": "연습 동료", "online": true})
+		seats.append({"peer": "", "token": "bot", "name": "연습 동료", "online": true, "col": 1, "ready": true})
+		seats[0]["ready"] = true
 		start_match()
 
 
@@ -66,18 +67,81 @@ func start_match() -> String:
 		return "방장만 시작할 수 있어요"
 	if seats.size() < 2:
 		return "친구가 들어와야 시작할 수 있어요"
+	for st in seats:
+		if not st["ready"]:
+			return "모두 준비해야 시작할 수 있어요"
+	_begin()
+	return ""
+
+
+func _begin() -> void:
 	var names := []
 	for s in seats:
 		names.append(s["name"])
 	m = GMatch.new(names)
 	for i in seats.size():
 		m.players[i]["online"] = seats[i]["online"]
+		m.players[i]["col"] = seats[i]["col"]
 	state = "game"
 	_bot_wave = 0
 	_sent_version = -1
 	_system("경기 시작! 먼저 길과 포탑을 함께 정해 보세요.")
 	_push_state()
-	return ""
+
+
+## 내 이름·색·준비를 바꾼다 (로비)
+func set_seat(d: Dictionary) -> void:
+	if is_host:
+		_apply_seat(0, d)
+	elif _host_peer != "":
+		var msg := d.duplicate()
+		msg["t"] = "seat"
+		net.send_to(_host_peer, msg)
+
+
+func _apply_seat(s: int, d: Dictionary) -> void:
+	if m != null or s < 0 or s >= seats.size():
+		return
+	if d.has("name"):
+		var n := str(d["name"]).strip_edges().left(10)
+		if n != "":
+			seats[s]["name"] = n
+	if d.has("col"):
+		var c := int(d["col"])
+		var taken := false
+		for i in seats.size():
+			if i != s and int(seats[i]["col"]) == c:
+				taken = true
+		if c >= 0 and c < 4 and not taken:
+			seats[s]["col"] = c
+	if d.has("ready"):
+		seats[s]["ready"] = bool(d["ready"])
+	if net and not solo:
+		net.broadcast(_lobby_data())
+
+
+func _free_col() -> int:
+	for c in 4:
+		var used := false
+		for st in seats:
+			if int(st["col"]) == c:
+				used = true
+		if not used:
+			return c
+	return 0
+
+
+## 결과 화면에서 모두 로비로 돌아간다
+func to_lobby() -> void:
+	if not is_host:
+		return
+	m = null
+	state = "lobby"
+	for st in seats:
+		st["ready"] = false
+	if net and not solo:
+		net.broadcast({"t": "tolobby"})
+		net.broadcast(_lobby_data())
 
 
 func tick(delta: float) -> void:
@@ -160,7 +224,7 @@ func _push_state() -> void:
 func _lobby_data() -> Dictionary:
 	var names := []
 	for s in seats:
-		names.append({"name": s["name"], "online": s["online"]})
+		names.append({"name": s["name"], "online": s["online"], "col": s["col"], "ready": s["ready"]})
 	return {"t": "lobby", "seats": names}
 
 
@@ -168,6 +232,8 @@ func _host_msg(from: String, d: Dictionary) -> void:
 	match str(d.get("t", "")):
 		"hello":
 			_hello(from, d)
+		"seat":
+			_apply_seat(_seat_of(from), d)
 		"cmd":
 			var s := _seat_of(from)
 			if s < 0:
@@ -212,7 +278,7 @@ func _hello(from: String, d: Dictionary) -> void:
 		if m != null or seats.size() >= MAX_SEATS:
 			net.send_to(from, {"t": "full", "why": "이미 시작했거나 자리가 없어요"})
 			return
-		seats.append({"peer": from, "token": token, "name": name, "online": true})
+		seats.append({"peer": from, "token": token, "name": name, "online": true, "col": _free_col(), "ready": false})
 		at = seats.size() - 1
 	else:
 		seats[at]["peer"] = from
@@ -331,7 +397,7 @@ func command(c: Dictionary) -> void:
 
 func rematch() -> void:
 	if is_host:
-		start_match()
+		_begin()
 
 
 func _client_msg(from: String, d: Dictionary) -> void:
@@ -343,6 +409,9 @@ func _client_msg(from: String, d: Dictionary) -> void:
 			if from == _host_peer:
 				state = "lost"
 				_host_peer = ""
+		"tolobby":
+			m = null
+			state = "lobby"
 		"_away":
 			host_away = bool(d.get("on", false))
 		"full":
@@ -356,7 +425,7 @@ func _client_msg(from: String, d: Dictionary) -> void:
 		"lobby":
 			seats = []
 			for s in d["seats"]:
-				seats.append({"peer": "", "token": "", "name": str(s["name"]), "online": bool(s["online"])})
+				seats.append({"peer": "", "token": "", "name": str(s["name"]), "online": bool(s["online"]), "col": int(s["col"]), "ready": bool(s["ready"])})
 		"st":
 			if m == null:
 				m = GMatch.new()

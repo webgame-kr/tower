@@ -32,9 +32,9 @@ func _roads() -> void:
 	ok(m.draft.is_empty(), "확정하면 미리보기 제거")
 	ok(m.board.validate(0, m.board.paths[0], {}) == "", "개조 후 경로 유효")
 	var blocked := GMatch.new(["A", "B"])
-	blocked.apply(0, {"op": "build", "type": "gun", "x": 1, "y": 4})
+	blocked.apply(0, {"op": "build", "type": "gun", "x": 1, "y": 9})
 	ok(blocked.board.reroute(0, 1, "detour", 1, blocked.tower_cells()).has("err"), "포탑과 겹치면 불가")
-	ok(blocked.board.reroute(0, 5, "detour", 1, {}).has("err"), "곧지 않은 구간 불가")
+	ok(blocked.board.reroute(0, 3, "detour", 1, {}).has("err"), "곧지 않은 구간 불가")
 	var edge := GMatch.new(["A", "B"])
 	ok(edge.board.reroute(0, 1, "detour", -1, {}).has("path"), "위쪽 우회 가능")
 	var long_path: Array = []
@@ -45,7 +45,7 @@ func _roads() -> void:
 
 func _economy() -> void:
 	var m := GMatch.new(["A", "B"])
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 3}) != "", "길 위 건설 불가")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 8}) != "", "길 위 건설 불가")
 	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 4}) == "", "건설")
 	ok(m.players[0]["gold"] == GData.START_GOLD - 60, "골드 차감")
 	var failed := m.apply(1, {"op": "build", "type": "gun", "x": 3, "y": 4})
@@ -76,8 +76,8 @@ func _flow() -> void:
 	m.apply(1, {"op": "ready"})
 	ok(m.phase == "combat", "전원 준비 시 전투")
 	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 4}) != "", "전투 중 건설 불가")
-	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 3.0}) == "", "긴급 냉각 사용")
-	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 3.0}) != "", "웨이브당 1회")
+	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 8.0}) == "", "긴급 냉각 사용")
+	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 8.0}) != "", "웨이브당 1회")
 	var en := {"id": 999, "type": "grunt", "e": 0, "dist": 1.0, "hp": 30.0, "max": 30.0, "slow": 0.0, "slow_t": 0.0}
 	for _i in 4:
 		m._chill(en, 0.55, 1.0, 0)
@@ -92,7 +92,7 @@ func _flow() -> void:
 	ok(m.road_owner == 1, "길 담당자 순환")
 	m.apply(0, {"op": "ready"})
 	m.apply(1, {"op": "ready"})
-	ok(m.phase == "combat" and m.apply(0, {"op": "ability", "x": 3.0, "y": 3.0}) == "", "다음 웨이브에 능력 다시 사용")
+	ok(m.phase == "combat" and m.apply(0, {"op": "ability", "x": 3.0, "y": 8.0}) == "", "다음 웨이브에 능력 다시 사용")
 	guard = 0
 	while m.phase == "combat" and guard < 20000:
 		m.step()

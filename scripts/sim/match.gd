@@ -17,6 +17,8 @@ var failed_wave := 0
 var time := 0.0
 var version := 0             # 건물·골드 등 구조가 바뀔 때마다 증가
 var fx: Array = []           # 그리기용 일회성 효과
+var gate_dmg: Array = [0, 0] # 입구별 성 피해
+var leaks: Dictionary = {}   # 성에 도착한 적 종류별 수
 
 var _queue: Array = []
 var _wave_t := 0.0
@@ -24,8 +26,9 @@ var _next_id := 1
 
 
 func _init(names: Array = []) -> void:
-	for n in names:
-		players.append({"name": str(n), "gold": GData.START_GOLD, "ready": false, "online": true, "used": false,
+	for i in names.size():
+		var n = names[i]
+		players.append({"name": str(n), "col": i, "gold": GData.START_GOLD, "ready": false, "online": true, "used": false,
 			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0})
 
 
@@ -139,7 +142,7 @@ func _prio(seat: int, c: Dictionary) -> String:
 	if t.is_empty():
 		return "내 포탑만 바꿀 수 있어요"
 	var v := str(c.get("v", ""))
-	if not ["first", "last", "strong"].has(v):
+	if not ["first", "strong", "near"].has(v):
 		return "잘못된 우선순위예요"
 	t["prio"] = v
 	version += 1
@@ -253,6 +256,8 @@ func _move_enemies(dt: float) -> void:
 		en["dist"] += float(d["speed"]) * (1.0 - float(en["slow"])) * dt
 		if en["dist"] >= board.paths[en["e"]].size() - 1 + 0.6:
 			hp -= int(d["hit"])
+			gate_dmg[int(en["e"])] += int(d["hit"])
+			leaks[en["type"]] = int(leaks.get(en["type"], 0)) + 1
 			fx.append({"k": "hit", "n": int(d["hit"]), "e": int(en["e"])})
 			enemies.remove_at(idx)
 			version += 1
@@ -305,7 +310,7 @@ func _pick(at: Vector2, radius: float, prio: String) -> Dictionary:
 			continue
 		var v := 0.0
 		match prio:
-			"last": v = -float(en["dist"])
+			"near": v = -_pos(en).distance_to(at)
 			"strong": v = float(en["hp"])
 			_: v = float(en["dist"]) - board.paths[en["e"]].size()
 		if v > best_v:
@@ -384,7 +389,7 @@ func to_data() -> Dictionary:
 		var t: Dictionary = towers[id]
 		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"]])
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "ed": edits_left, "ro": road_owner, "dr": draft,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data()}
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks}
 
 
 func load_data(d: Dictionary) -> void:
@@ -394,6 +399,7 @@ func load_data(d: Dictionary) -> void:
 	players = d["pl"]
 	for p in players:
 		p["gold"] = int(p["gold"])
+		p["col"] = int(p.get("col", 0))
 		p["kills"] = int(p["kills"])
 		p["support"] = int(p["support"])
 	towers = {}
@@ -411,6 +417,8 @@ func load_data(d: Dictionary) -> void:
 	time = float(d["tm"])
 	version = int(d["v"])
 	board.load_data(d["pa"])
+	gate_dmg = [int(d["gd"][0]), int(d["gd"][1])]
+	leaks = d["lk"]
 
 
 func enemies_data() -> Array:

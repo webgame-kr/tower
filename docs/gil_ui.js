@@ -10,10 +10,10 @@
     el.placeholder = placeholder;
     el.autocomplete = "off";
     el.spellcheck = false;
-    el.style.cssText = "position:fixed;z-index:20;box-sizing:border-box;height:34px;padding:0 10px;border-radius:7px;" +
-      "border:1px solid #5d6f58;background:#17201aee;color:#f4f1e4;font:14px 'Malgun Gothic','Apple SD Gothic Neo',sans-serif;outline:none;display:none";
-    el.addEventListener("focus", function () { el.style.borderColor = "#f0c75e"; });
-    el.addEventListener("blur", function () { el.style.borderColor = "#5d6f58"; });
+    el.style.cssText = "position:fixed;z-index:20;box-sizing:border-box;height:34px;padding:0 12px;border-radius:4px;" +
+      "border:1px solid #4A5258;background:#121518;color:#E6E2D8;font:14px 'Malgun Gothic','Apple SD Gothic Neo',sans-serif;outline:none;display:none";
+    el.addEventListener("focus", function () { el.style.borderColor = "#D9A21B"; });
+    el.addEventListener("blur", function () { el.style.borderColor = "#4A5258"; });
     el.addEventListener("keydown", function (e) {
       e.stopPropagation();
       // 한글 조합을 확정하는 Enter 는 전송이 아니다
@@ -51,6 +51,8 @@
       el.style.left = (r.left + x * scale) + "px";
       el.style.top = (r.top + y * scale) + "px";
       el.style.width = (w * scale) + "px";
+      el.style.height = (38 * scale) + "px";
+      el.style.fontSize = Math.max(12, 14 * scale) + "px";
       el.style.display = "block";
     },
     hide: function (id) { if (fields[id]) { fields[id].style.display = "none"; fields[id].blur(); } },

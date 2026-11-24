@@ -16,12 +16,21 @@ func _run(players: int, roads: bool) -> String:
 	var guard := 0
 	while m.phase != "over" and guard < 400000:
 		guard += 1
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			for s in players:
-				if m.phase == "prep":
+				if m.phase == "reward":
+					for vk in m.players.size():
+						m.apply(vk, {"op": "vote", "v": "gold"})
+				elif m.phase == "prep":
 					GBot.play_prep(m, s, roads)
 			for s in players:          # 길을 고치면 전원 준비가 풀리므로 다시 준비
-				if m.phase == "prep":
+				if m.phase == "reward":
+					for vk in m.players.size():
+						m.apply(vk, {"op": "vote", "v": "gold"})
+				elif m.phase == "prep":
 					m.apply(s, {"op": "ready", "v": true})
 		else:
 			m.step()

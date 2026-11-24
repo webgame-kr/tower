@@ -103,11 +103,7 @@ func _rules() -> void:
 		var copy := GMatch.new()
 		copy.load_data(JSON.parse_string(JSON.stringify(m.to_data())))
 		ok(copy.board.paths == m.board.paths and copy.gate_dmg.size() == m.gate_dmg.size(), "%d인 상태 동기화" % n)
-		var owners := []
-		for w in n + 1:
-			owners.append(m.road_owner)
-			m._finish_wave()
-		ok(owners[n] == owners[0] and _unique(owners.slice(0, n)) == n, "%d인 길 담당 순환" % n)
+		ok(m.team_edits() == n * GData.EDITS_PER_PLAYER, "%d인 길 개조 기회는 사람당" % n)
 	var fast := GMatch.new(["A", "B", "C"])
 	fast.apply(0, {"op": "speed", "v": true})
 	fast.apply(1, {"op": "speed", "v": true})

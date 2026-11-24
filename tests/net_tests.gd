@@ -144,6 +144,10 @@ func _init() -> void:
 	ok(solo.m.players[1]["ready"] == true and solo.m.towers.size() > 0, "연습 동료가 준비")
 	solo.command({"op": "ready", "v": true})
 	ok(solo.m.phase == "combat", "연습 모드 전투 시작")
+	ok(int(solo.m.players[1]["edits"]) == GData.EDITS_PER_PLAYER, "연습 동료는 길을 직접 바꾸지 않음")
+	ok(solo.chat.any(func(r): return int(r["seat"]) == 1 and r.has("x")), "연습 동료가 길 변경을 핑으로 제안")
+	solo.command({"op": "speed", "v": true})
+	ok(solo.m.speed == 2, "혼자 연습에서는 2배가 바로 켜짐")
 
 	print("net %d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)

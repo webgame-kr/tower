@@ -14,5 +14,5 @@ if echo "$smoke" | grep -qE 'SCRIPT ERROR|Parse Error'; then echo "$smoke" | gre
 "$G" --headless --path . --export-release "Web" docs/index.html 2>&1 | grep -E 'ERROR|error' || true
 cp web/gil_net.js web/gil_ui.js docs/
 touch docs/.gdignore
-printf '<!doctype html><meta charset="utf-8"><title>길 좀 막아봐</title><script>location.replace("docs/"+location.search)</script>\n' > index.html
+printf '<!doctype html><meta charset="utf-8"><title>길 좀 막아봐</title><script>location.replace("docs/"+location.search+location.hash)</script>\n' > index.html
 ls -la docs | head -20

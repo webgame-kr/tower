@@ -3,15 +3,15 @@ extends RefCounted
 ## 경기 판정의 기준. 호스트만 apply/step 을 부르고, 손님은 to_data 사본을 받아 그리기만 한다.
 
 var board := Board.new()
-var phase := "prep"     # prep | combat | over
+var phase := "prep"     # prep | combat | reward | over
 var wave := 1
 var hp := GData.CASTLE_HP
 var players: Array = [] # {name, gold, ready, online, used, dmg, kills, slow, support}
 var towers: Dictionary = {}  # id -> {id, owner, type, x, y, lv, branch, spent, prio, cd}
 var enemies: Array = []      # {id, type, e, dist, hp, max, slow, slow_t}
-var edits_left := GData.EDITS_PER_THEME
-var road_owner := 0
-var draft: Dictionary = {}   # 길 담당자의 공유 미리보기
+var draft: Dictionary = {}   # 길 미리보기 {seat, e, i, kind, side}: 누구의 제안인지 함께 보인다
+var summary: Dictionary = {} # 지난 웨이브 결과 {wave, leaks[], gold}
+var _wave_leaks: Array = []
 var cleared := false
 var failed_wave := 0
 var time := 0.0
@@ -36,7 +36,14 @@ func _init(names: Array = []) -> void:
 	for i in names.size():
 		var n = names[i]
 		players.append({"name": str(n), "col": i, "gold": GData.START_GOLD, "ready": false, "online": true, "used": false,
-			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0})
+			"dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0, "edits": GData.EDITS_PER_PLAYER, "fast": false, "free_up": 0, "vote": ""})
+
+
+func team_edits() -> int:
+	var n := 0
+	for p in players:
+		n += int(p.get("edits", 0))
+	return n
 
 
 ## 지금 웨이브의 입구별 적 구성
@@ -63,6 +70,8 @@ func apply(seat: int, c: Dictionary) -> String:
 		return _prio(seat, c)
 	if op == "speed":
 		return _speed(seat, bool(c.get("v", false)))
+	if op == "vote":
+		return _vote(seat, str(c.get("v", "")))
 	if phase != "prep":
 		return "준비 단계에서만 할 수 있어요"
 	var err := ""
@@ -170,6 +179,9 @@ func _upgrade(seat: int, c: Dictionary) -> String:
 	if lv == 2 and branch != "a" and branch != "b":
 		return "강화 방향을 골라 주세요"
 	var cost: int = GData.TOWERS[t["type"]]["up"][lv - 1]
+	if int(players[seat].get("free_up", 0)) > 0:      # 보상으로 받은 무료 강화
+		players[seat]["free_up"] = int(players[seat]["free_up"]) - 1
+		cost = 0
 	if players[seat]["gold"] < cost:
 		return "골드가 부족해요"
 	players[seat]["gold"] -= cost
@@ -193,15 +205,13 @@ func _prio(seat: int, c: Dictionary) -> String:
 
 
 func _edit(seat: int, c: Dictionary) -> String:
-	if seat != road_owner:
-		return "이번 웨이브의 길 담당자만 확정할 수 있어요"
-	if edits_left <= 0:
-		return "길 개조 기회가 없어요"
+	if int(players[seat].get("edits", 0)) <= 0:
+		return "이번 테마의 내 길 개조 기회를 다 썼어요"
 	var r := board.reroute(int(c.get("e", -1)), int(c.get("i", -1)), str(c.get("kind", "")), int(c.get("side", 0)), tower_cells())
 	if r.has("err"):
 		return str(r["err"])
 	board.paths[int(c["e"])] = r["path"]
-	edits_left -= 1
+	players[seat]["edits"] = int(players[seat]["edits"]) - 1
 	draft = {}
 	for p in players:
 		p["ready"] = false
@@ -209,15 +219,47 @@ func _edit(seat: int, c: Dictionary) -> String:
 
 
 func _draft(seat: int, c: Dictionary) -> String:
-	if seat != road_owner:
-		return "길 담당자만 미리보기를 공유해요"
 	if not c.has("e"):
 		draft = {}
 		return ""
 	var r := board.reroute(int(c.get("e", -1)), int(c.get("i", -1)), str(c.get("kind", "")), int(c.get("side", 0)), tower_cells())
 	if r.has("err"):
 		return str(r["err"])
-	draft = {"e": int(c["e"]), "i": int(c["i"]), "kind": str(c["kind"]), "side": int(c["side"])}
+	draft = {"seat": seat, "e": int(c["e"]), "i": int(c["i"]), "kind": str(c["kind"]), "side": int(c["side"])}
+	return ""
+
+
+## 테마 보스를 넘기면 팀 보상을 투표로 고른다. 동점이면 목록 순서가 앞선 것.
+func _vote(seat: int, v: String) -> String:
+	if phase != "reward":
+		return "지금은 보상을 고를 때가 아니에요"
+	if not GData.REWARDS.has(v):
+		return "없는 보상이에요"
+	players[seat]["vote"] = v
+	version += 1
+	var counts := {}
+	for p in players:
+		if not p["online"]:
+			continue
+		if str(p["vote"]) == "":
+			return ""
+		counts[p["vote"]] = int(counts.get(p["vote"], 0)) + 1
+	var best := ""
+	for k in GData.REWARDS:
+		if counts.has(k) and (best == "" or int(counts[k]) > int(counts[best])):
+			best = k
+	match best:
+		"heal": hp = mini(GData.CASTLE_HP, hp + GData.REWARD_HEAL)
+		"gold":
+			for p in players:
+				p["gold"] = int(p["gold"]) + GData.REWARD_GOLD
+		"up":
+			for p in players:
+				p["free_up"] = int(p.get("free_up", 0)) + 1
+	summary["reward"] = best
+	for p in players:
+		p["vote"] = ""
+	phase = "prep"
 	return ""
 
 
@@ -262,6 +304,9 @@ func _start_wave() -> void:
 		for n in int(g[2]):
 			_queue.append({"t": float(g[4]) + n * float(g[3]), "e": int(g[0]), "type": str(g[1])})
 	_queue.sort_custom(func(a, b): return a["t"] < b["t"])
+	_wave_leaks = []
+	_wave_leaks.resize(board.paths.size())
+	_wave_leaks.fill(0)
 	for p in players:
 		p["ready"] = false
 		p["used"] = false
@@ -278,7 +323,7 @@ func step(dt := GData.TICK) -> void:
 		var d: Dictionary = GData.ENEMIES[q["type"]]
 		var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size())
 		enemies.append({"id": _next_id, "type": q["type"], "e": q["e"], "dist": 0.0, "hp": max_hp, "max": max_hp,
-			"slow": 0.0, "slow_t": 0.0})
+			"slow": 0.0, "slow_t": 0.0, "shred": 0.0, "shred_t": 0.0})
 		_next_id += 1
 	_move_enemies(dt)
 	if phase == "over":
@@ -295,6 +340,10 @@ func _move_enemies(dt: float) -> void:
 			en["slow_t"] -= dt
 			if en["slow_t"] <= 0.0:
 				en["slow"] = 0.0
+		if float(en.get("shred_t", 0.0)) > 0.0:
+			en["shred_t"] = float(en["shred_t"]) - dt
+			if en["shred_t"] <= 0.0:
+				en["shred"] = 0.0
 		var d: Dictionary = GData.ENEMIES[en["type"]]
 		var zone := _zone()
 		var cell := Vector2i(_pos(en))
@@ -308,6 +357,8 @@ func _move_enemies(dt: float) -> void:
 		if en["dist"] >= board.paths[en["e"]].size() - 1 + 0.6:
 			hp -= int(d["hit"])
 			gate_dmg[int(en["e"])] += int(d["hit"])
+			if int(en["e"]) < _wave_leaks.size():
+				_wave_leaks[int(en["e"])] += 1
 			leaks[en["type"]] = int(leaks.get(en["type"], 0)) + 1
 			fx.append({"k": "hit", "n": int(d["hit"]), "e": int(en["e"])})
 			enemies.remove_at(idx)
@@ -421,15 +472,24 @@ func is_ghost(en: Dictionary) -> bool:
 func _hurt(en: Dictionary, s: Dictionary, owner: int) -> void:
 	if is_ghost(en):
 		return
-	var armor: float = maxf(float(GData.ENEMIES[en["type"]]["armor"]) - float(s["pierce"]), 0.0)
+	if float(s.get("shred", 0.0)) > 0.0:      # 자석탑: 방어력을 잠시 깎는다 (겹치면 큰 쪽)
+		en["shred"] = maxf(float(en.get("shred", 0.0)), float(s["shred"]))
+		en["shred_t"] = 3.0
+	var base_armor: float = float(GData.ENEMIES[en["type"]]["armor"]) * (1.0 - float(en.get("shred", 0.0)))
+	var armor: float = maxf(base_armor - float(s["pierce"]), 0.0)
 	var dmg: float = maxf(float(s["dmg"]) - armor, float(s["dmg"]) * 0.25)
 	dmg = minf(dmg, float(en["hp"]))
 	en["hp"] = float(en["hp"]) - dmg
 	players[owner]["dmg"] += dmg
+	if dmg >= 12.0:
+		var at := _pos(en)
+		fx.append({"k": "num", "x": at.x, "y": at.y, "n": roundi(dmg)})
 	if float(s["slow"]) > 0.0:
 		_chill(en, float(s["slow"]), 1.4, owner)
 	if float(en["hp"]) <= 0.0:
 		players[owner]["kills"] += 1
+		var at := _pos(en)
+		fx.append({"k": "kill", "x": at.x, "y": at.y, "big": en["type"] == "heavy" or en["type"] == "boss"})
 		enemies.erase(en)
 
 
@@ -444,16 +504,19 @@ func _finish_wave() -> void:
 	var gold := GData.wave_gold(wave)
 	for p in players:
 		p["gold"] += gold
+	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
 	if wave >= GData.LAST_WAVE:
 		cleared = true
 		phase = "over"
 		version += 1
 		return
-	if wave % GData.THEME_LEN == 0:
-		edits_left = GData.EDITS_PER_THEME
+	var boss := wave % GData.THEME_LEN == 0
+	if boss:
+		for p in players:
+			p["edits"] = GData.EDITS_PER_PLAYER
+			p["vote"] = ""
 	wave += 1
-	phase = "prep"
-	road_owner = next_online((road_owner + 1) % players.size())
+	phase = "reward" if boss else "prep"
 	version += 1
 
 
@@ -469,8 +532,7 @@ func set_online(seat: int, on: bool) -> void:
 	players[seat]["online"] = on
 	if not on:
 		players[seat]["ready"] = false
-		if road_owner == seat:
-			road_owner = next_online(seat)
+		if int(draft.get("seat", -1)) == seat:
 			draft = {}
 	version += 1
 	if not on and phase == "prep":
@@ -489,7 +551,7 @@ func to_data() -> Dictionary:
 	for id in towers:
 		var t: Dictionary = towers[id]
 		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"]])
-	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "ed": edits_left, "ro": road_owner, "dr": draft,
+	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": draft, "sm": summary,
 		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "gd": gate_dmg, "lk": leaks, "sp": speed}
 
 
@@ -503,16 +565,19 @@ func load_data(d: Dictionary) -> void:
 		p["col"] = int(p.get("col", 0))
 		p["kills"] = int(p["kills"])
 		p["support"] = int(p["support"])
+		p["edits"] = int(p.get("edits", 0))
+		p["free_up"] = int(p.get("free_up", 0))
 	towers = {}
 	for r in d["tw"]:
 		towers[int(r[0])] = {"id": int(r[0]), "owner": int(r[1]), "type": str(r[2]), "x": int(r[3]), "y": int(r[4]),
 			"lv": int(r[5]), "branch": str(r[6]), "spent": int(r[7]), "prio": str(r[8]), "cd": 0.0}
-	edits_left = int(d["ed"])
-	road_owner = int(d["ro"])
 	draft = {}
 	var dr: Dictionary = d["dr"]
 	if not dr.is_empty():
-		draft = {"e": int(dr["e"]), "i": int(dr["i"]), "kind": str(dr["kind"]), "side": int(dr["side"])}
+		draft = {"seat": int(dr.get("seat", -1)), "e": int(dr["e"]), "i": int(dr["i"]), "kind": str(dr["kind"]), "side": int(dr["side"])}
+	summary = d.get("sm", {})
+	if summary.has("wave"):
+		summary["wave"] = int(summary["wave"])
 	cleared = bool(d["cl"])
 	failed_wave = int(d["fw"])
 	time = float(d["tm"])
@@ -528,7 +593,7 @@ func load_data(d: Dictionary) -> void:
 func enemies_data() -> Array:
 	var out := []
 	for en in enemies:
-		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), en["max"], snappedf(en["slow"], 0.01), is_ghost(en)])
+		out.append([en["id"], en["type"], en["e"], snappedf(en["dist"], 0.01), roundi(en["hp"]), en["max"], snappedf(en["slow"], 0.01), is_ghost(en), snappedf(float(en.get("shred", 0.0)), 0.01)])
 	return out
 
 
@@ -536,4 +601,4 @@ func load_enemies(rows: Array) -> void:
 	enemies = []
 	for r in rows:
 		enemies.append({"id": int(r[0]), "type": str(r[1]), "e": int(r[2]), "dist": float(r[3]), "hp": float(r[4]),
-			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7])})
+			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "shred": float(r[8]) if r.size() > 8 else 0.0, "shred_t": 0.0})

@@ -22,7 +22,10 @@ func _save(name_: String) -> void:
 
 func _play_to(m: GMatch, wave: int) -> void:
 	while m.wave < wave and m.phase != "over":
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			GBot.play_prep(m, 0)
 			GBot.play_prep(m, 1)
 			m.apply(0, {"op": "ready", "v": true})
@@ -66,7 +69,11 @@ func _run() -> void:
 		for _i in 150:
 			m.step()
 		await _save("t%d_combat" % theme)
-		while m.phase == "combat":
+		while m.phase == "combat" or m.phase == "reward":
+			if m.phase == "reward":
+				m.apply(0, {"op": "vote", "v": "gold"})
+				m.apply(1, {"op": "vote", "v": "gold"})
+				continue
 			m.step()
 			m.hp = maxi(m.hp, 40)
 
@@ -82,7 +89,10 @@ func _run() -> void:
 	g._theme_goal = g._theme
 
 	while m.phase != "over":
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			m.apply(0, {"op": "ready", "v": true})
 			m.apply(1, {"op": "ready", "v": true})
 		else:

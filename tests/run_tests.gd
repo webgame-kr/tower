@@ -18,6 +18,7 @@ func _init() -> void:
 	_flow()
 	_towers()
 	_themes()
+	_rewards()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -26,12 +27,12 @@ func _init() -> void:
 func _roads() -> void:
 	var m := GMatch.new(["A", "B"])
 	var before: int = m.board.paths[0].size()
-	ok(m.apply(1, {"op": "edit", "e": 0, "i": 1, "kind": "detour", "side": 1}) != "", "담당자가 아니면 길 확정 불가")
-	ok(m.apply(0, {"op": "draft", "e": 0, "i": 1, "kind": "detour", "side": 1}) == "", "미리보기 가능")
-	ok(m.edits_left == 2 and m.board.paths[0].size() == before, "미리보기는 기회와 경로를 바꾸지 않음")
-	ok(m.apply(0, {"op": "edit", "e": 0, "i": 1, "kind": "detour", "side": 1}) == "", "우회로 확정")
-	ok(m.board.paths[0].size() == before + 4 and m.edits_left == 1, "우회로 +4칸, 기회 1 소비")
+	ok(m.apply(1, {"op": "draft", "e": 0, "i": 1, "kind": "detour", "side": 1}) == "" and int(m.draft["seat"]) == 1, "누구나 미리보기를 올리고 주인이 보임")
+	ok(m.team_edits() == 2 and m.board.paths[0].size() == before, "미리보기는 기회와 경로를 바꾸지 않음")
+	ok(m.apply(0, {"op": "edit", "e": 0, "i": 1, "kind": "detour", "side": 1}) == "", "다른 사람의 제안을 내 기회로 확정")
+	ok(m.board.paths[0].size() == before + 4 and int(m.players[0]["edits"]) == 0 and int(m.players[1]["edits"]) == 1, "우회로 +4칸, 확정한 사람의 기회만 소비")
 	ok(m.draft.is_empty(), "확정하면 미리보기 제거")
+	ok(m.apply(0, {"op": "edit", "e": 1, "i": 1, "kind": "detour", "side": 1}) != "", "내 기회를 다 쓰면 확정 불가")
 	ok(m.board.validate(0, m.board.paths[0], {}) == "", "개조 후 경로 유효")
 	var blocked := GMatch.new(["A", "B"])
 	blocked.apply(0, {"op": "build", "type": "gun", "x": 1, "y": 9})
@@ -92,7 +93,8 @@ func _flow() -> void:
 		guard += 1
 	ok(m.phase == "prep" and m.wave == 2, "웨이브 종료 후 다음 준비")
 	ok(m.hp == GData.CASTLE_HP - 12, "포탑 없으면 12마리 도착 피해")
-	ok(m.road_owner == 1, "길 담당자 순환")
+	ok(int(m.players[0]["edits"]) == GData.EDITS_PER_PLAYER, "보스 전에는 길 개조 기회가 다시 생기지 않음")
+	ok(int(m.summary["wave"]) == 1 and int(m.summary["leaks"][0]) + int(m.summary["leaks"][1]) == 12, "웨이브 결과에 입구별 새어 나간 적 수")
 	m.apply(0, {"op": "ready"})
 	m.apply(1, {"op": "ready"})
 	ok(m.phase == "combat" and m.apply(0, {"op": "ability", "x": 3.0, "y": 8.0}) == "", "다음 웨이브에 능력 다시 사용")
@@ -101,8 +103,9 @@ func _flow() -> void:
 		m.step()
 		guard += 1
 	m.wave = 2
+	m.apply(1, {"op": "draft", "e": 0, "i": 1, "kind": "detour", "side": 1})
 	m.set_online(1, false)
-	ok(m.road_owner == 0, "끊긴 담당자는 다음 사람에게 인계")
+	ok(m.draft.is_empty(), "끊긴 사람의 미리보기는 정리")
 	m.apply(0, {"op": "ready"})
 	ok(m.phase == "combat", "끊긴 사람은 준비 판정 제외")
 	m.hp = 1
@@ -181,6 +184,40 @@ func _themes() -> void:
 	ok(late.any(func(g): return g[1] == "boss"), "테마 마지막 웨이브에 보스")
 	var row: Array = GMatch.new(["A", "B"]).enemies_data()
 	ok(row.is_empty(), "빈 적 목록 직렬화")
+
+
+func _rewards() -> void:
+	var m := GMatch.new(["A", "B"])
+	m.wave = GData.THEME_LEN
+	m.players[0]["edits"] = 0
+	m.hp = 80
+	m._finish_wave()
+	ok(m.phase == "reward" and int(m.players[0]["edits"]) == GData.EDITS_PER_PLAYER, "보스 뒤에는 보상 투표, 길 개조 기회 다시 지급")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 4}) != "", "보상 투표 중에는 건설 불가")
+	m.apply(0, {"op": "vote", "v": "heal"})
+	ok(m.phase == "reward", "한 명만 투표하면 그대로")
+	m.apply(1, {"op": "vote", "v": "gold"})
+	ok(m.phase == "prep" and m.hp == 90 and m.summary["reward"] == "heal", "동점이면 목록 앞쪽(본부 회복)")
+	var g := GMatch.new(["A", "B"])
+	g.phase = "reward"
+	g.apply(0, {"op": "vote", "v": "up"})
+	g.apply(1, {"op": "vote", "v": "up"})
+	g.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 4})
+	var id: int = g.towers.keys()[0]
+	var gold: int = g.players[0]["gold"]
+	ok(g.apply(0, {"op": "upgrade", "id": id}) == "" and int(g.players[0]["gold"]) == gold and int(g.players[0]["free_up"]) == 0, "무료 강화 1회")
+	var mag := GMatch.new(["A", "B"])
+	mag.phase = "combat"
+	var heavy := {"id": 7, "type": "heavy", "e": 0, "dist": 1.0, "hp": 100.0, "max": 100.0, "slow": 0.0, "slow_t": 0.0}
+	mag.enemies = [heavy]
+	var gun := GData.tower_stats("gun", 1, "")
+	mag._hurt(heavy, gun, 0)
+	var plain := 100.0 - float(heavy["hp"])
+	heavy["hp"] = 100.0
+	mag._hurt(heavy, GData.tower_stats("magnet", 1, ""), 0)
+	heavy["hp"] = 100.0
+	mag._hurt(heavy, gun, 0)
+	ok(100.0 - float(heavy["hp"]) > plain, "자석탑이 방어력을 깎으면 기관포 피해 증가")
 
 
 func _enemy(id: int, dist: float) -> Dictionary:

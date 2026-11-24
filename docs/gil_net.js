@@ -3,7 +3,7 @@
 // 호스트가 방을 열면 친구들은 링크(?room=코드)로 들어와 호스트에 직접 연결된다 (별 모양).
 // 받은 메시지는 inbox 에 쌓이고, 게임이 매 프레임 poll() 로 가져간다.
 (function () {
-  var PREFIX = "gilmakgi-v1-";
+  var PREFIX = "gilmakgi-v2-";
   // 직접 연결이 막힌 네트워크(휴대폰 데이터, 회사·학교 와이파이)를 위해 주소 확인(STUN)과 중계(TURN) 서버를 여럿 둔다.
   var ICE = {
     iceServers: [
@@ -16,10 +16,35 @@
   var JOIN_TRIES = 1;
   // 직접 연결(WebRTC)이 안 되는 친구를 위한 중계: 공개 MQTT 서버(웹소켓)로 방장과 메시지를 주고받는다.
   var BROKERS = ["wss://broker.emqx.io:8084/mqtt", "wss://test.mosquitto.org:8081/mqtt"];
-  var TOPIC = "gilmakgi-v1/";
+  var TOPIC = "gilmakgi-v2/";
   function rid() { return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6); }
+
+  // ── 방 보안 ──
+  // 방 코드(12자리)가 곧 비밀이다. 코드에서 직접 연결 ID, 중계 주제, 암호 키를 만들어
+  // 공개 중계 서버에는 해시된 주제와 AES-GCM 암호문만 보낸다. 코드 자체는 어디에도 보내지 않는다.
+  var enc = new TextEncoder(), dec = new TextDecoder();
+  function b64(u8) { var s = ""; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function derive(code) {
+    var raw = enc.encode("gilmakgi:" + code);
+    return crypto.subtle.digest("SHA-256", raw).then(function (h) {
+      var hex = Array.prototype.map.call(new Uint8Array(h), function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+      return crypto.subtle.importKey("raw", raw, "PBKDF2", false, ["deriveKey"]).then(function (base) {
+        return crypto.subtle.deriveKey({ name: "PBKDF2", salt: enc.encode("gilmakgi-room-v2"), iterations: 100000, hash: "SHA-256" },
+          base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+      }).then(function (key) { return { id: hex.slice(0, 24), topic: hex.slice(24, 48), key: key }; });
+    });
+  }
+  function seal(key, text) {
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    return crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, enc.encode(text)).then(function (ct) { return b64(iv) + "." + b64(new Uint8Array(ct)); });
+  }
+  function unseal(key, s) {
+    var parts = String(s).split(".");
+    return crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(parts[0]) }, key, unb64(parts[1])).then(function (pt) { return dec.decode(pt); });
+  }
   var net = {
-    ver: 2,
+    ver: 3,
     relays: [],       // 연결된 중계 클라이언트
     trail: [],        // 진단 코드: 연결하며 실패한 단계들 (예: E30-E50)
 
@@ -109,18 +134,34 @@
       return t ? Math.floor((Date.now() - t) / 1000) : -1;
     },
 
+    room: null,                     // {id, topic, key}: 방 코드에서 만든 값
+    _out: Promise.resolve(),        // 암호화가 끝난 순서대로 보내기
+    _in: Promise.resolve(),
+
+    // 12자리 = 약 59비트. 맞혀서 들어오기는 사실상 불가능하다.
     randomCode: function () {
       var a = "abcdefghjkmnpqrstuvwxyz23456789", s = "";
-      for (var i = 0; i < 6; i++) s += a[Math.floor(Math.random() * a.length)];
+      var r = crypto.getRandomValues(new Uint32Array(12));
+      for (var i = 0; i < 12; i++) s += a[r[i] % a.length];
       return s;
     },
 
     host: function () {
       if (typeof Peer === "undefined") { net.status = "error"; net.error = "연결 라이브러리를 불러오지 못했어요"; return ""; }
+      if (!window.crypto || !crypto.subtle) { net.status = "error"; net.error = "이 브라우저는 보안 연결을 지원하지 않아요"; return ""; }
       net.close();
-      net.code = net.randomCode();
+      var code = net.code = net.randomCode();
       net.status = "opening";
-      net.peer = new Peer(PREFIX + net.code, { config: ICE });
+      derive(code).then(function (room) {
+        if (net.code !== code) return;
+        net.room = room;
+        net._host2(code);
+      }).catch(function () { net.status = "error"; net.error = "보안 키를 만들지 못했어요"; });
+      return code;
+    },
+
+    _host2: function (code) {
+      net.peer = new Peer(PREFIX + net.room.id, { config: ICE });
       net.peer.on("open", function (id) { net.myId = id; net.status = "hosting"; });
       net.peer.on("connection", function (conn) {
         conn.on("open", function () {
@@ -134,22 +175,34 @@
         net.status = "error"; net.error = String(e && e.type || e);
       });
       net.peer.on("disconnected", function () { if (net.peer && !net.peer.destroyed) net.peer.reconnect(); });
-      net._relayHost(net.code);
-      return net.code;
+      net._relayHost(code);
     },
 
     // 중계 가짜 연결: 게임 쪽에서는 보통 연결과 똑같이 보인다
     _relayConn: function (peerId, cli, topic, myId) {
+      var key = net.room.key;
       var c = {
         peer: peerId, open: true, relay: true,
-        send: function (json) { if (c.open) cli.publish(topic, JSON.stringify({ f: myId, d: json })); },
+        _pub: function (json) {
+          net._out = net._out.then(function () { return seal(key, json); })
+            .then(function (sealed) { cli.publish(topic, JSON.stringify({ f: myId, d: sealed })); })
+            .catch(function () {});
+        },
+        send: function (json) { if (c.open) c._pub(json); },
         close: function () {
           if (!c.open) return;
-          try { cli.publish(topic, JSON.stringify({ f: myId, d: '{"t":"_bye"}' })); } catch (e) {}
+          c._pub('{"t":"_bye"}');
           c.open = false;
         }
       };
       return c;
+    },
+
+    // 중계로 받은 암호문을 받은 순서대로 풀어서 넘긴다. 키가 다르면 조용히 버린다.
+    _open: function (sealed, then) {
+      var key = net.room && net.room.key;
+      if (!key) return;
+      net._in = net._in.then(function () { return unseal(key, sealed); }).then(then).catch(function () {});
     },
 
     // 중계로 받은 것 처리 (from: 보낸 쪽 이름, json: 문자열)
@@ -179,7 +232,7 @@
     },
 
     _relayHost: function (code) {
-      var hostTopic = TOPIC + code + "/h";
+      var hostTopic = TOPIC + net.room.topic + "/h";
       BROKERS.forEach(function (url) {
         net._mqtt(url, function (cli) {
           if (net.code !== code || net.status === "closed") { cli.end(true); return; }
@@ -191,21 +244,23 @@
             try { m = JSON.parse(payload.toString()); } catch (e) { return; }
             if (!m || !m.f) return;
             var from = "relay-" + m.f;
-            var inner;
-            try { inner = JSON.parse(m.d); } catch (e) { return; }
-            if (inner && inner.t === "_hi") {
-              var old = net.conns[from];
-              if (!old || !old.open) {
-                var c = net._relayConn(from, cli, TOPIC + code + "/g/" + m.f, "h");
-                net.conns[from] = c;
-                net.seen[from] = Date.now();
-                net._push(from, { t: "_joined" });
+            net._open(m.d, function (plain) {
+              var inner;
+              try { inner = JSON.parse(plain); } catch (e) { return; }
+              if (inner && inner.t === "_hi") {
+                var old = net.conns[from];
+                if (!old || !old.open) {
+                  var c = net._relayConn(from, cli, TOPIC + net.room.topic + "/g/" + m.f, "h");
+                  net.conns[from] = c;
+                  net.seen[from] = Date.now();
+                  net._push(from, { t: "_joined" });
+                }
+                net.conns[from].send('{"t":"_welcome"}');
+                return;
               }
-              net.conns[from].send('{"t":"_welcome"}');
-              return;
-            }
-            if (!net.conns[from]) return;
-            net._relayIn(from, m.d);
+              if (!net.conns[from]) return;
+              net._relayIn(from, plain);
+            });
           });
         }, function () {});
       });
@@ -226,15 +281,16 @@
       net.stage = "relay";
       net.tryNo = bi + 2;
       var me = rid();
-      var hostId = PREFIX + code;
-      var myTopic = TOPIC + code + "/g/" + me;
+      var hostId = PREFIX + net.room.id;
+      var myTopic = TOPIC + net.room.topic + "/g/" + me;
+      var hostTopic = TOPIC + net.room.topic + "/h";
       var token = net._joinToken = rid();
       net._mqtt(BROKERS[bi], function (cli) {
         if (net._joinToken !== token) { cli.end(true); return; }
         net.relays.push(cli);
         var welcomed = false;
         cli.subscribe(myTopic, function () {
-          cli.publish(TOPIC + code + "/h", JSON.stringify({ f: me, d: '{"t":"_hi"}' }));
+          seal(net.room.key, '{"t":"_hi"}').then(function (s) { cli.publish(hostTopic, JSON.stringify({ f: me, d: s })); });
         });
         var wt = setTimeout(function () {
           if (welcomed || net._joinToken !== token) return;
@@ -247,20 +303,22 @@
           if (topic !== myTopic) return;
           var m;
           try { m = JSON.parse(payload.toString()); } catch (e) { return; }
-          var inner;
-          try { inner = JSON.parse(m.d); } catch (e) { return; }
-          if (inner && inner.t === "_welcome") {
-            if (welcomed) return;
-            welcomed = true;
-            clearTimeout(wt);
-            net.conns[hostId] = net._relayConn(hostId, cli, TOPIC + code + "/h", me);
-            net.seen[hostId] = Date.now();
-            net.status = "joined";
-            net.via = "relay";
-            net._push(hostId, { t: "_open" });
-            return;
-          }
-          if (welcomed) net._relayIn(hostId, m.d);
+          net._open(m.d, function (plain) {
+            var inner;
+            try { inner = JSON.parse(plain); } catch (e) { return; }
+            if (inner && inner.t === "_welcome") {
+              if (welcomed) return;
+              welcomed = true;
+              clearTimeout(wt);
+              net.conns[hostId] = net._relayConn(hostId, cli, hostTopic, me);
+              net.seen[hostId] = Date.now();
+              net.status = "joined";
+              net.via = "relay";
+              net._push(hostId, { t: "_open" });
+              return;
+            }
+            if (welcomed) net._relayIn(hostId, plain);
+          });
         });
       }, function () {
         if (net._joinToken !== token) return;
@@ -274,6 +332,17 @@
       net.close();
       net.code = code;
       if (tryNo === 1) { net.t0 = Date.now(); if (code !== net._lastCode) net.trail = []; net._lastCode = code; }
+      if (!window.crypto || !crypto.subtle) { net.status = "error"; net.error = "이 브라우저는 보안 연결을 지원하지 않아요"; return; }
+      net.status = "joining";
+      net.stage = "signal";
+      derive(code).then(function (room) {
+        if (net.code !== code) return;
+        net.room = room;
+        net._join2(code, tryNo);
+      }).catch(function () { net.status = "error"; net.error = "보안 키를 만들지 못했어요"; });
+    },
+
+    _join2: function (code, tryNo) {
       // 직접 연결 라이브러리가 없거나 주소에 relay=1 이 있으면 바로 중계로
       if (typeof Peer === "undefined") net._fail("E10");
       if (typeof Peer === "undefined" || /[?&]relay=1/.test(location.search)) { net._relayJoin(code, 0); return; }
@@ -296,7 +365,7 @@
       net.peer.on("open", function (id) {
         net.myId = id;
         net.stage = "connect";
-        var conn = net.peer.connect(PREFIX + code, { reliable: true });
+        var conn = net.peer.connect(PREFIX + net.room.id, { reliable: true });
         conn.on("open", function () {
           net.conns[conn.peer] = conn;
           net.status = "joined";
@@ -363,13 +432,14 @@
       net.error = "";
     },
 
+    // 초대 코드는 주소의 # 뒤에 둔다: # 뒤는 서버로 전송되지 않는다
     roomParam: function () {
-      var m = /[?&]room=([a-z0-9]+)/.exec(location.search);
+      var m = /[#&?]room=([a-z0-9]+)/.exec(location.hash + "&" + location.search);
       return m ? m[1] : "";
     },
 
     inviteUrl: function (code) {
-      return location.origin + location.pathname + "?room=" + code;
+      return location.origin + location.pathname + "#room=" + code;
     },
 
     copy: function (text) {

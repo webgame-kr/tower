@@ -22,12 +22,21 @@ func _save(name_: String) -> void:
 
 func _play(m: GMatch, wave: int) -> void:
 	while m.wave < wave and m.phase != "over":
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			for k in 4:
-				if m.phase == "prep":
+				if m.phase == "reward":
+					for vk in m.players.size():
+						m.apply(vk, {"op": "vote", "v": "gold"})
+				elif m.phase == "prep":
 					GBot.play_prep(m, k)
 			for k in 4:
-				if m.phase == "prep":
+				if m.phase == "reward":
+					for vk in m.players.size():
+						m.apply(vk, {"op": "vote", "v": "gold"})
+				elif m.phase == "prep":
 					m.apply(k, {"op": "ready", "v": true})
 		else:
 			m.step()
@@ -60,16 +69,25 @@ func _run() -> void:
 		g._theme_goal = g._theme
 		g._trans_t = 0.0
 		for k in 4:
-			if m.phase == "prep":
+			if m.phase == "reward":
+				for vk in m.players.size():
+					m.apply(vk, {"op": "vote", "v": "gold"})
+			elif m.phase == "prep":
 				GBot.play_prep(m, k)
 		for k in 4:
-			if m.phase == "prep":
+			if m.phase == "reward":
+				for vk in m.players.size():
+					m.apply(vk, {"op": "vote", "v": "gold"})
+			elif m.phase == "prep":
 				m.apply(k, {"op": "ready", "v": true})
 		for _i in 170:
 			m.step()
 		await _save("combat4_%d" % theme_wave)
 	while m.phase != "over":
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			for k in 4:
 				m.apply(k, {"op": "ready", "v": true})
 		else:

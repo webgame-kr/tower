@@ -46,7 +46,10 @@ func _run() -> void:
 	m.apply(0, {"op": "draft"})
 
 	while m.wave < 5:
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			GBot.play_prep(m, 0)
 			GBot.play_prep(m, 1)
 			m.apply(0, {"op": "ready", "v": true})
@@ -76,7 +79,10 @@ func _run() -> void:
 	g._toggle_pause()
 
 	while m.phase != "over":
-		if m.phase == "prep":
+		if m.phase == "reward":
+			for vk in m.players.size():
+				m.apply(vk, {"op": "vote", "v": "gold"})
+		elif m.phase == "prep":
 			m.apply(0, {"op": "ready", "v": true})
 			m.apply(1, {"op": "ready", "v": true})
 		else:

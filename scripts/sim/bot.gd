@@ -4,16 +4,25 @@ extends RefCounted
 
 
 ## 준비 단계에서 할 일을 모두 하고 준비 완료한다.
-static func play_prep(m: GMatch, seat: int, use_roads := true) -> void:
+## suggest_only: 혼자 연습의 동료는 길을 직접 바꾸지 않고, 미리보기로 제안만 한다 (돌려준 값이 제안).
+static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := false) -> Dictionary:
 	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
-	if use_roads and m.road_owner == seat:
-		while m.edits_left > 0:
-			var e := best_road(m)
-			if e.is_empty():
-				break
-			if m.apply(seat, {"op": "edit", "e": e["e"], "i": e["i"], "kind": e["kind"], "side": e["side"]}) != "":
-				break
+	var suggestion := {}
+	if use_roads and int(m.players[seat].get("edits", 0)) > 0:
+		var e := best_road(m)
+		if not e.is_empty():
+			if suggest_only:
+				if m.apply(seat, {"op": "draft", "e": e["e"], "i": e["i"], "kind": e["kind"], "side": e["side"]}) == "":
+					suggestion = e
+			else:
+				m.apply(seat, {"op": "edit", "e": e["e"], "i": e["i"], "kind": e["kind"], "side": e["side"]})
 	m.apply(seat, {"op": "ready", "v": true})
+	return suggestion
+
+
+## 보상 투표: 본부가 많이 다쳤으면 회복, 아니면 골드
+static func vote(m: GMatch, seat: int) -> void:
+	m.apply(seat, {"op": "vote", "v": "heal" if m.hp < 70 else "gold"})
 
 
 static func _spend(m: GMatch, seat: int) -> void:
@@ -24,7 +33,10 @@ static func _spend(m: GMatch, seat: int) -> void:
 			if int(m.towers[id]["owner"]) == seat:
 				mine.append(m.towers[id])
 		var has_cold := mine.any(func(t): return t["type"] == "cold")
+		var has_magnet := mine.any(func(t): return t["type"] == "magnet")
 		var want := "cold" if mine.size() >= 2 and not has_cold else ("cannon" if mine.size() % 2 == 1 else "gun")
+		if mine.size() >= 3 and not has_magnet and m.wave >= 3:
+			want = "magnet"
 		if mine.size() >= 4:
 			var up := _cheapest_upgrade(mine)
 			if not up.is_empty() and gold >= int(up["cost"]):

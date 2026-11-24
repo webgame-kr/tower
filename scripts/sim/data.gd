@@ -11,7 +11,10 @@ const LAST_WAVE := 25         # 다섯 테마를 모두 지나는 구간
 const THEME_LEN := 5          # 이 웨이브마다 테마 경계 (길 개조 기회 재지급)
 const CASTLE_HP := 100
 const START_GOLD := 320
-const EDITS_PER_THEME := 2
+const EDITS_PER_PLAYER := 1   # 테마마다 한 사람당 길 개조 기회
+const REWARD_HEAL := 10
+const REWARD_GOLD := 150
+const REWARDS := {"heal": "본부 내구도 +10", "gold": "전원 +150G", "up": "전원 무료 강화 1회"}
 const SELL_RATE := 0.8
 const SLOW_CAP := 0.6
 const ABILITY_RADIUS := 1.5
@@ -20,8 +23,8 @@ const ABILITY_SLOW := 0.4
 const MAX_ALIVE := 60
 const TICK := 0.05
 const HP_GROWTH := 0.22
-static var player_scale := {3: [1.0, 1.0], 4: [1.36, 1.24]}   # 인원별 [적 수, 적 체력] 배율
-static var hp_mul := 2.0     # 적 체력 배율 (밸런스 조정용)
+static var player_scale := {3: [1.0, 1.0], 4: [1.25, 1.15]}   # 인원별 [적 수, 적 체력] 배율
+static var hp_mul := 2.5     # 적 체력 배율 (밸런스 조정용)
 
 const BASE_PATHS := [
 	[[0, 8], [1, 8], [2, 8], [3, 8], [4, 8], [4, 7], [4, 6], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5], [8, 6], [8, 7], [8, 8], [9, 8], [10, 8], [11, 8]],
@@ -53,6 +56,12 @@ const TOWERS := {
 		"a": {"label": "냉기 장막", "dmg": 2.0, "cd": 0.8, "range": 3.0, "slow": 0.3, "aura": true},
 		"b": {"label": "얼음 송곳", "dmg": 6.0, "cd": 0.8, "range": 2.0, "slow": 0.55},
 	},
+	"magnet": {
+		"name": "자석탑", "cost": 140, "up": [110, 150],
+		"lv": [{"dmg": 2.0, "cd": 0.8, "range": 2.5, "shred": 0.4}, {"dmg": 3.0, "cd": 0.6, "range": 2.5, "shred": 0.5}],
+		"a": {"label": "자기장", "dmg": 2.0, "cd": 0.8, "range": 2.5, "shred": 0.4, "aura": true},
+		"b": {"label": "갑옷 분쇄", "dmg": 8.0, "cd": 0.6, "range": 2.5, "shred": 0.7},
+	},
 }
 
 const ENEMIES := {
@@ -60,7 +69,7 @@ const ENEMIES := {
 	"swarm": {"name": "떼거리", "hp": 13.0, "armor": 0.0, "speed": 1.6, "hit": 1},
 	"heavy": {"name": "중장갑", "hp": 120.0, "armor": 4.0, "speed": 0.8, "hit": 1},
 	"rusher": {"name": "돌격병", "hp": 42.0, "armor": 0.0, "speed": 2.4, "hit": 1},
-	"boss": {"name": "초원 대장", "hp": 900.0, "armor": 3.0, "speed": 0.62, "hit": 15},
+	"boss": {"name": "초원 대장", "hp": 520.0, "armor": 3.0, "speed": 0.62, "hit": 15},
 }
 
 ## 입구(e)별 묶음: [적, 수, 간격(초), 시작(초)]
@@ -162,5 +171,5 @@ static func tower_stats(type: String, level: int, branch: String) -> Dictionary:
 	return {
 		"dmg": float(s.get("dmg", 0.0)), "cd": float(s.get("cd", 1.0)), "range": float(s.get("range", 3.0)),
 		"splash": float(s.get("splash", 0.0)), "slow": float(s.get("slow", 0.0)), "pierce": float(s.get("pierce", 0.0)),
-		"aura": bool(s.get("aura", false)), "line": bool(s.get("line", false)),
+		"aura": bool(s.get("aura", false)), "line": bool(s.get("line", false)), "shred": float(s.get("shred", 0.0)),
 	}

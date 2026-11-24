@@ -171,10 +171,13 @@ func _host_tick(delta: float) -> void:
 	if solo and m.phase == "prep":
 		if _bot_wave != m.wave:
 			_bot_wave = m.wave
-			GBot.play_prep(m, 1)
+			var sug := GBot.play_prep(m, 1, true, true)
+			if not sug.is_empty():
+				_bot_suggest(sug)
 		elif not m.players[1]["ready"]:
 			m.apply(1, {"op": "ready", "v": true})
-	_acc = minf(_acc + delta * m.speed, GData.TICK * 8 * m.speed)
+	# 브라우저가 탭을 가리면 프레임이 크게 줄어든다: 한 프레임에 최대 2초까지 따라잡아 실제 시간에 맞춘다
+	_acc = minf(_acc + delta * m.speed, 2.0 * m.speed)
 	while _acc >= GData.TICK:
 		_acc -= GData.TICK
 		m.step()
@@ -190,6 +193,27 @@ func _host_tick(delta: float) -> void:
 		if net and not solo and (m.phase == "combat" or not _out_fx.is_empty()):
 			net.broadcast({"t": "en", "r": m.enemies_data(), "f": _trim_fx()})
 		_out_fx = []
+
+
+## 연습 동료는 길을 직접 바꾸지 않고, 미리보기와 핑·채팅으로 제안한다
+func _bot_suggest(e: Dictionary) -> void:
+	var r := m.board.reroute(int(e["e"]), int(e["i"]), str(e["kind"]), int(e["side"]), m.tower_cells())
+	if not r.has("path"):
+		return
+	var old: Array = m.board.paths[int(e["e"])]
+	var sum := Vector2.ZERO
+	var n := 0
+	for c in r["path"]:
+		if not old.has(c):
+			sum += Vector2(c) + Vector2(0.5, 0.5)
+			n += 1
+	if n == 0:
+		return
+	var at := sum / n
+	_ping_times.erase(1)
+	_ping(1, {"kind": "road", "x": at.x, "y": at.y})
+	_add_chat({"seat": 1, "col": seats[1]["col"], "name": seats[1]["name"],
+		"text": "%s 이렇게 돌리면 포탑이 더 오래 쏴요. 좋으면 길 조각 패널에서 확정해 주세요" % GData.PIECES[str(e["kind"])]["name"]})
 
 
 func _any_relay() -> bool:
@@ -409,6 +433,8 @@ func command(c: Dictionary) -> void:
 		var err := run(seat, c)
 		if err != "":
 			toasts.append(err)
+		elif solo and (c.get("op", "") == "speed" or c.get("op", "") == "vote"):
+			run(1, c)      # 연습 동료는 배속과 보상 투표를 사람에게 맞춘다
 		return
 	_seq += 1
 	var id := "%s-%d" % [_nonce, _seq]

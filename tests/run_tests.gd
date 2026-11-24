@@ -15,6 +15,7 @@ func ok(cond: bool, label: String) -> void:
 func _init() -> void:
 	_layout()
 	_roads()
+	_merge()
 	_economy()
 	_flow()
 	_towers()
@@ -110,6 +111,40 @@ func _roads() -> void:
 	ok(e.board.validate(0, broken, {}, 0, e.cap()) != "", "끊긴 길 불가")
 	var spliced := e.board.spliced(0, 3, 1, [Vector2i(2, 2)])
 	ok(spliced.size() == (GData.BASE_PATHS[0] as Array).size() and spliced[2] == Vector2i(2, 2) and spliced[3] == Vector2i(3, 1), "끝점 순서가 반대여도 이어 붙임")
+
+
+func _merge() -> void:
+	var m := GMatch.new(["A", "B"])
+	m.players[0]["mat"] = GData.MAT_MAX
+	var trail := [Vector2i(7, 5), Vector2i(7, 4), Vector2i(8, 4), Vector2i(9, 4), Vector2i(10, 4), Vector2i(11, 4), Vector2i(12, 4)]
+	var f_j: int = m.board.paths[1].find(Vector2i(13, 4))
+	var path := m.board.merged(0, 24, trail, 1, f_j)
+	ok(m.apply(0, {"op": "edit", "e": 0, "path": Board.flat(path)}) == "", "다른 길 위로 그리면 합류")
+	ok(m.board.paths[0].slice(-4) == m.board.paths[1].slice(-4) and m.board.junctions().size() == 1, "합류 뒤로는 같은 길")
+	var bad: Array = m.board.paths[0].slice(0, 25)
+	bad.append_array([Vector2i(7, 5), Vector2i(7, 4), Vector2i(8, 4), Vector2i(9, 4), Vector2i(10, 4), Vector2i(11, 4), Vector2i(12, 4), Vector2i(13, 4), Vector2i(12, 4)])
+	ok(m.board.validate(0, [Vector2i(0, 1), Vector2i(13, 4), Vector2i(14, 4)], {}, 0, 99) != "", "겹친 뒤 갈라지면 불가")
+	m.phase = "combat"
+	m.enemies = []
+	var en := m._spawn("grunt", 0)
+	while m.enemies.has(en):
+		m._move_enemies(0.5)
+	ok(m.gate_dmg[0] == 1, "합류한 길로도 적이 본부에 닿음")
+	m.phase = "prep"
+	var lane1_old: Array = m.board.paths[1]
+	var straight: Array = GData.BASE_PATHS[0]
+	ok(m.apply(0, {"op": "edit", "e": 0, "path": Board.flat(straight)}) == "" and m.board.junctions().is_empty() and m.board.paths[1] == lane1_old, "다시 그려 갈라지면 원래 길은 그대로")
+	ok(m.apply(0, {"op": "undo"}) == "" and m.board.junctions().size() == 1, "갈라진 것도 되돌리기")
+	# 합류한 뒤 공유 구간을 바꾸면 합류한 길도 따라간다
+	var l1: Array = m.board.paths[1]
+	var np: Array = l1.slice(0, l1.find(Vector2i(13, 4)) + 1)
+	np.append_array([Vector2i(14, 4), Vector2i(14, 5), Vector2i(14, 6), Vector2i(14, 7), Vector2i(13, 7), Vector2i(12, 7)])
+	ok(m.apply(1, {"op": "edit", "e": 1, "path": Board.flat(np)}) == "", "합류한 공유 구간 다시 그리기")
+	ok(m.board.paths[0].slice(-6) == np.slice(-6) and m.board.junctions().size() == 1, "합류한 길도 함께 바뀜")
+	ok(m.apply(1, {"op": "undo"}) == "" and m.board.paths[0].slice(-3) == [Vector2i(13, 5), Vector2i(13, 6), Vector2i(12, 6)], "되돌리면 둘 다 제자리")
+	var copy := GMatch.new()
+	copy.load_data(JSON.parse_string(JSON.stringify(m.to_data())))
+	ok(copy.board.junctions().size() == 1, "합류 상태 동기화")
 
 
 func _economy() -> void:

@@ -1146,7 +1146,7 @@ func _update_hover() -> void:
 		_trail_step(m, n)
 		cells = _trail["cells"]
 		last = cells[-1] if not cells.is_empty() else m.board.paths[int(_trail["e"])][int(_trail["i"])]
-		if int(_trail.get("j", -1)) >= 0:
+		if int(_trail.get("j", -1)) != -1:
 			return
 
 
@@ -1163,21 +1163,45 @@ func _trail_step(m: GMatch, n: Vector2i) -> void:
 	if n == path[int(_trail["i"])]:
 		_trail["cells"] = []
 		return
+	if Board.is_castle(n):
+		return
 	var j := path.find(n)
 	if j >= 0:
 		_trail["j"] = j
 		cells.append(n)
 		return
+	var f := m.board.lane_of(n)
+	if f >= 0:      # 다른 길에 닿으면 그 길과 합류
+		_trail["j"] = -2
+		_trail["f"] = f
+		_trail["fj"] = m.board.paths[f].find(n)
+		cells.append(n)
+		return
 	cells.append(n)
+	for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		if Board.is_castle(n + d):      # 본부 바로 옆: 여기서 놓으면 새 끝
+			_trail["j"] = -3
+			return
 
 
 ## 지금 그리는 선으로 만든 새 경로 (끝점이 없으면 빈 배열)
 func _trail_path(m: GMatch) -> Array:
-	if _trail.is_empty() or int(_trail.get("j", -1)) < 0:
+	if _trail.is_empty() or int(_trail.get("j", -1)) == -1:
 		return []
+	var e := int(_trail["e"])
+	var j := int(_trail["j"])
 	var cells: Array = (_trail["cells"] as Array).duplicate()
-	cells.pop_back()
-	return m.board.spliced(int(_trail["e"]), int(_trail["i"]), int(_trail["j"]), cells)
+	if j >= 0:
+		cells.pop_back()
+		return m.board.spliced(e, int(_trail["i"]), j, cells)
+	var out: Array = m.board.paths[e].slice(0, int(_trail["i"]) + 1)
+	if j == -2:
+		cells.pop_back()
+		out.append_array(cells)
+		out.append_array(m.board.paths[int(_trail["f"])].slice(int(_trail["fj"])))
+		return out
+	out.append_array(cells)
+	return out
 
 
 func _gain(m: GMatch, e: int, path: Array) -> int:
@@ -1507,7 +1531,7 @@ func _gui_input(ev: InputEvent) -> void:
 		if not path.is_empty():
 			s.command({"op": "draft", "e": int(_trail["e"]), "path": Board.flat(path)})
 		elif (_trail["cells"] as Array).size() > 0:
-			_say("같은 길의 다른 칸에서 놓아야 해요")
+			_say("같은 길, 다른 길(합류) 또는 본부 바로 옆에서 놓아야 해요")
 		_trail = {}
 		return
 	if ev is InputEventMouseButton and ev.pressed:
@@ -2108,11 +2132,15 @@ func _draw_draft_info(m: GMatch, edit: Dictionary) -> void:
 		return
 	var err := str(edit.get("err", ""))
 	var cost := int(edit.get("cost", 0))
+	var join := ""
+	for o in m.board.paths.size():
+		if o != e and not m.board.paths[e].any(func(c): return m.board.paths[o].has(c)) and path.any(func(c): return m.board.paths[o].has(c)):
+			join = " · %d번 길과 합류" % (o + 1)
 	var price := ("자재 %d 사용" % cost) if cost > 0 else (("자재 %d 돌려받음" % -cost) if cost < 0 else "자재 0")
 	if err != "":
 		_banner("%d번 길 · %s" % [e + 1, err], DANGER, true)
 	elif seat == s.seat:
-		_banner("%s · 내 자재 %d · %d번 길 %d→%d/%d칸 · E 확정" % [price, mat, e + 1, old.size(), path.size(), m.cap()],
+		_banner("%s · 내 자재 %d · %d번 길 %d→%d/%d칸%s · E 확정" % [price, mat, e + 1, old.size(), path.size(), m.cap(), join],
 			AMBER if cost <= mat else DANGER, cost > mat)
 	else:
 		_banner("%s 님 제안 · %d번 길 %d → %d칸 · %s · E 로 내 자재로 확정" % [who["name"], e + 1, old.size(), path.size(), price], AMBER)
@@ -2619,6 +2647,10 @@ func _draw_game() -> void:
 		var ex: Array = GData.EXTRA_PATH
 		for i in range(1, ex.size()):
 			draw_dashed_line(_p(Vector2(ex[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(ex[i]) + Vector2(0.5, 0.5)), Color(1, 1, 1, 0.28), 3.0, 7.0)
+	for jn in m.board.junctions():     # 합류 지점: 뚫리면 적이 한꺼번에 온다
+		var at := _p(Vector2(jn[0]) + Vector2(0.5, 0.5))
+		_dash_ring(at, CELL * 0.62, AMBER, 2.0)
+		_zone_tag(at + Vector2(0, -CELL * 0.95), "%d·%d번 합류" % [int(jn[1]) + 1, int(jn[2]) + 1], AMBER)
 	_draw_zones()                      # 실제 효과 구역
 	_draw_grid(m)
 	_draw_draft(m, edit)
@@ -2833,7 +2865,7 @@ func _draw_hint(m: GMatch) -> void:
 		text = "범위를 확인하고 클릭해 사용 · 반경 %.1f칸 · %d초" % [GData.ABILITY_RADIUS, int(GData.ABILITY_TIME)]
 	elif mode.begins_with("road:"):
 		parts = ["끌기", "E 확정", "Ctrl+Z", "ESC"]
-		text = "길 위 한 칸에서 눌러 끌고 같은 길의 다른 칸에서 놓기 · 자재 %d" % int(m.players[s.seat].get("mat", 0))
+		text = "길 위 한 칸에서 끌어 같은 길(또는 본부 옆)에 놓기 · 다른 길에 놓으면 합류 · 자재 %d" % int(m.players[s.seat].get("mat", 0))
 	elif mode.begins_with("move:"):
 		parts = ["클릭", "ESC 취소"]
 		text = "옮길 빈 칸을 클릭 · 무료"

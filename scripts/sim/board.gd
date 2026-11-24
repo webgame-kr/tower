@@ -88,6 +88,51 @@ func spliced(e: int, i: int, j: int, trail: Array) -> Array:
 	return out
 
 
+## 합류: e 의 i 칸에서 trail 을 지나 f 의 j 칸으로 들어가 그 뒤를 함께 쓴다
+func merged(e: int, i: int, trail: Array, f: int, j: int) -> Array:
+	var out: Array = paths[e].slice(0, i + 1)
+	out.append_array(trail)
+	out.append_array(paths[f].slice(j))
+	return out
+
+
+## e 를 path 로 바꿀 때 e 와 합류해 있던 길들이 따라 바뀐 모습 (합류 지점이 남아 있을 때만)
+func synced(e: int, path: Array) -> Dictionary:
+	var out := {}
+	var old: Array = paths[e]
+	for o in paths.size():
+		if o == e:
+			continue
+		var p: Array = paths[o]
+		var k := -1
+		for idx in p.size():
+			if old.has(p[idx]):
+				k = idx
+				break
+		if k < 0:
+			continue
+		var jn := path.find(p[k])
+		if jn < 0:
+			continue      # 갈라졌다: 그 길은 그대로
+		var np: Array = p.slice(0, k)
+		np.append_array(path.slice(jn))
+		if np != p:
+			out[o] = np
+	return out
+
+
+## 두 길이 합류한 칸 목록 [칸, 길 a, 길 b]
+func junctions() -> Array:
+	var out := []
+	for a in paths.size():
+		for b in range(a + 1, paths.size()):
+			for c in paths[a]:
+				if paths[b].has(c):
+					out.append([c, a, b])
+					break
+	return out
+
+
 ## 새 경로의 공사 자재 비용 (늘어난 칸 - 옛 도로 칸). 줄이면 음수 = 돌려받음
 func cost_of(e: int, path: Array, theme: int) -> int:
 	var old: Array = paths[e]
@@ -100,7 +145,9 @@ func cost_of(e: int, path: Array, theme: int) -> int:
 
 ## 기획서 유효 조건: 입구에서 시작, 본부까지 연결, 자기 교차 없음, 장애물·다른 길과 안 겹침.
 ## blockers: 포탑 칸 -> 주인 (함정은 넣지 않는다)
-func validate(e: int, path: Array, blockers: Dictionary, theme: int, cap: int) -> String:
+## lanes: 다른 길들의 상태 (합류로 함께 바뀌는 길을 반영할 때)
+func validate(e: int, path: Array, blockers: Dictionary, theme: int, cap: int, lanes: Array = []) -> String:
+	var all: Array = lanes if not lanes.is_empty() else paths
 	if path.size() > cap:
 		return "길이 상한(%d칸)을 넘어요" % cap
 	if path.is_empty() or path[0] != paths[e][0]:
@@ -120,9 +167,15 @@ func validate(e: int, path: Array, blockers: Dictionary, theme: int, cap: int) -
 			var step: Vector2i = c - path[idx - 1]
 			if absi(step.x) + absi(step.y) != 1:
 				return "길이 끊겨요"
-		for other in paths.size():
-			if other != e and paths[other].has(c):
-				return "다른 입구의 길과 겹쳐요"
+	for other in all.size():      # 다른 길과 겹치면 합류: 겹친 곳부터 본부까지 같은 길이어야 한다
+		if other == e:
+			continue
+		var o: Array = all[other]
+		for k in path.size():
+			if o.has(path[k]):
+				if path.slice(k) != o.slice(o.find(path[k])):
+					return "다른 길과 겹쳐요 · 합류하면 본부까지 같은 길이어야 해요"
+				break
 	var last: Vector2i = path[path.size() - 1]
 	for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
 		if is_castle(last + d):

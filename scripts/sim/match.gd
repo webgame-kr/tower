@@ -360,10 +360,19 @@ func check_route(seat: int, e: int, path: Array) -> Dictionary:
 		taken[spot] = true
 		moves.append([t["id"], spot.x, spot.y])
 		blk.erase(c)
-	var err := board.validate(e, path, blk, theme(), cap())
+	var sync := board.synced(e, path)
+	var lanes: Array = board.paths.duplicate()
+	lanes[e] = path
+	for o in sync:
+		lanes[o] = sync[o]
+	var err := board.validate(e, path, blk, theme(), cap(), lanes)
 	if err != "":
 		return {"err": err}
-	return {"path": path, "cost": board.cost_of(e, path, theme()), "moves": moves}
+	for o in sync:
+		err = board.validate(o, sync[o], blk, theme(), cap(), lanes)
+		if err != "":
+			return {"err": "합류한 %d번 길: %s" % [o + 1, err]}
+	return {"path": path, "cost": board.cost_of(e, path, theme()), "moves": moves, "sync": sync}
 
 
 func _free_beside(c: Vector2i, path: Array, taken: Dictionary) -> Vector2i:
@@ -423,7 +432,11 @@ func _edit(seat: int, c: Dictionary) -> String:
 		t["y"] = int(mv[2])
 	if not _undo.has(seat):
 		_undo[seat] = []
-	_undo[seat].append({"e": e, "old": board.paths[e], "cost": cost, "moves": back})
+	var olds := {e: board.paths[e]}
+	for o in r["sync"]:
+		olds[o] = board.paths[o]
+		board.paths[o] = r["sync"][o]
+	_undo[seat].append({"e": e, "old": board.paths[e], "olds": olds, "cost": cost, "moves": back})
 	board.paths[e] = r["path"]
 	players[seat]["mat"] = clampi(int(players[seat]["mat"]) - cost, 0, GData.MAT_MAX)
 	drafts.erase(seat)
@@ -446,10 +459,16 @@ func _undo_edit(seat: int) -> String:
 		if towers.has(int(mv[0])):
 			var t: Dictionary = towers[int(mv[0])]
 			blk.erase(Vector2i(int(t["x"]), int(t["y"])))
-	if board.validate(e, u["old"], blk, theme(), 999) != "":
-		_undo[seat].append(u)
-		return "그사이 바뀐 것이 있어 되돌릴 수 없어요"
-	board.paths[e] = u["old"]
+	var lanes: Array = board.paths.duplicate()
+	var olds: Dictionary = u.get("olds", {e: u["old"]})
+	for o in olds:
+		lanes[o] = olds[o]
+	for o in olds:
+		if board.validate(o, olds[o], blk, theme(), 999, lanes) != "":
+			_undo[seat].append(u)
+			return "그사이 바뀐 것이 있어 되돌릴 수 없어요"
+	for o in olds:
+		board.paths[o] = olds[o]
 	for mv in u["moves"]:
 		if towers.has(int(mv[0])):
 			towers[int(mv[0])]["x"] = int(mv[1])

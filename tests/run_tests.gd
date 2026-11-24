@@ -27,6 +27,7 @@ func _init() -> void:
 	_reactions()
 	_picks()
 	_new_towers()
+	_invest()
 	_sync()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
@@ -536,6 +537,62 @@ func _rx(a: String, b: String, o1 := 0, o2 := 0) -> Array:
 	m._apply_status(en, a, o1)
 	m._apply_status(en, b, o2)
 	return [m, en, near]
+
+
+func _invest() -> void:
+	var m := GMatch.new(["A", "B"])
+	m.apply(0, {"op": "build", "type": "cold", "x": 5, "y": 3})
+	var id: int = m.towers.keys()[0]
+	var t: Dictionary = m.towers[id]
+	ok(m.apply(0, {"op": "invest", "id": id}) != "", "내 포탑에는 투자 못 함")
+	var gold: int = m.players[1]["gold"]
+	ok(m.apply(1, {"op": "invest", "id": id}) == "" and m.invest_gauge(t) == 20 and int(m.players[1]["gold"]) == gold - 20, "투자 한 번 = 다음 강화비 25% (10골드 단위로 내림: 100 → 20)")
+	m.apply(1, {"op": "invest", "id": id})
+	var og: int = m.players[0]["gold"]
+	ok(m.apply(0, {"op": "upgrade", "id": id}) == "" and int(m.players[0]["gold"]) == og - 60 and int(t["lv"]) == 2, "주인은 모인 만큼 덜 내고 강화")
+	ok(m.invest_gauge(t) == 0, "강화하면 게이지 비움")
+	ok(m.apply(0, {"op": "noinv", "id": id}) == "" and m.apply(1, {"op": "invest", "id": id}) != "", "투자 막기")
+	m.apply(0, {"op": "noinv", "id": id})
+	m.players[1]["gold"] = 1000
+	for _i in 6:
+		m.apply(1, {"op": "invest", "id": id})
+	var cp := GMatch.new()
+	cp.load_data(JSON.parse_string(JSON.stringify(m.to_data())))
+	ok(cp.invest_gauge(cp.towers[id]) == m.invest_gauge(t) and int((cp.towers[id]["contrib"] as Dictionary).get(1, 0)) > 0, "투자 게이지·기여 동기화")
+	ok(m.invest_gauge(t) == m.next_up_cost(t) and m.apply(1, {"op": "invest", "id": id}) != "", "게이지가 차면 더 못 냄")
+	# 피해 기록과 판매 나눔
+	var shares := m.tower_shares(t)
+	ok(float(shares[1]) > 0.0 and is_equal_approx(float(shares[0]) + float(shares[1]), 1.0), "낸 비율 계산")
+	m.phase = "combat"
+	var en := _enemy(1, 5.0)
+	en["hp"] = 1000.0
+	m.enemies = [en]
+	var d0 := float(m.players[0]["dmg"])
+	var d1 := float(m.players[1]["dmg"])
+	var s := GData.tower_stats("cold", 2, "")
+	s["tid"] = id
+	s["dmg"] = 100.0
+	m._hurt(en, s, 0)
+	ok(float(m.players[1]["dmg"]) - d1 > 0.0 and is_equal_approx(float(m.players[0]["dmg"]) - d0 + float(m.players[1]["dmg"]) - d1, 100.0), "피해 기록은 낸 비율대로 나눔")
+	m.phase = "prep"
+	t["fresh"] = false
+	var value := m.sell_value(t)
+	var g0: int = m.players[0]["gold"]
+	var g1: int = m.players[1]["gold"]
+	m.apply(0, {"op": "sell", "id": id})
+	ok(int(m.players[1]["gold"]) - g1 == int(floor(value * float(shares[1]))) and int(m.players[0]["gold"]) - g0 + int(m.players[1]["gold"]) - g1 == value, "판매하면 낸 비율대로 돌려줌")
+	# 주인이 끊기면 5초 뒤 자동 강화
+	var a := GMatch.new(["A", "B"])
+	a.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	var aid: int = a.towers.keys()[0]
+	for _i in 4:
+		a.apply(1, {"op": "invest", "id": aid})
+	a.set_online(0, false)
+	a.phase = "combat"
+	for _i in int(GData.INVEST_AUTO / GData.TICK) + 2:
+		a._auto_upgrades(GData.TICK)
+	ok(int(a.towers[aid]["lv"]) == 2, "주인이 없으면 게이지가 찬 뒤 5초에 자동 강화")
+	ok(int(a.players[1]["inv"]) == 80, "투자 기록 (결과 화면)")
 
 
 func _new_towers() -> void:

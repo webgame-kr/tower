@@ -126,6 +126,11 @@ var _pick_wave := 0           # 카드 띠를 자동으로 연 웨이브
 var pick_btns: Array = []
 var lock_btns: Array = []
 var pick_go: Button
+var invest_btn: Button
+var noinv_btn: Button
+var _sell_armed := -1          # 남이 투자한 포탑: 한 번 더 눌러야 판매
+var _inv_note := ""
+var _inv_note_t := 0.0
 var pick_reroll: Button
 var _summary_wave := 0
 var _summary_t := 0.0
@@ -533,6 +538,10 @@ func _build_hud() -> void:
 	move_btn = _btn(hud, Rect2(), "이동", _on_move, "sec", T.LABEL)
 	fix_btn = _btn(hud, Rect2(), "수리 · 자재 1", _on_fix, "sec", T.LABEL)
 	sell_btn = _btn(hud, Rect2(), "", _on_sell, "sec", T.LABEL)
+	invest_btn = _btn(hud, Rect2(), "", _on_invest, "pri", T.LABEL)
+	invest_btn.tooltip_text = "다음 강화비의 25% 를 내요 · 낸 만큼 피해 기록을 나눠 가져요"
+	noinv_btn = _btn(hud, Rect2(), "", _on_noinv, "sec", T.LABEL)
+	noinv_btn.tooltip_text = "팀원이 이 포탑에 투자하지 못하게 해요"
 
 
 ## 일시정지 메뉴와 설정 창 (타이틀에서도 설정 창을 쓴다)
@@ -1293,6 +1302,13 @@ func _take_fx() -> void:
 			"newrx":
 				_newrx = str(f["n"])
 				_newrx_t = 2.0
+			"invest":
+				if int(f["o"]) == s.seat and s.m.towers.has(int(f["id"])):
+					var tt: Dictionary = s.m.towers[int(f["id"])]
+					_inv_note = "%s이 %s에 +%d" % [str(s.m.players[int(f["by"])]["name"]).left(6), GData.TOWERS[tt["type"]]["name"], int(f["n"])]
+					if bool(f.get("full", false)):
+						_inv_note += " · 강화 준비됨"
+					_inv_note_t = 1.5 if not bool(f.get("full", false)) else 3.0
 			"boom":
 				_fxs.append({"k": "kill", "a": Vector2(f["x"], f["y"]), "big": true, "t": 0.45, "life": 0.45})
 			"puddle":
@@ -1318,6 +1334,7 @@ func _take_fx() -> void:
 func _update_camera(delta: float) -> void:
 	var m := s.m
 	_newrx_t -= delta
+	_inv_note_t -= delta
 	if m.phase != _last_phase:
 		if m.phase == "prep" and _last_phase != "":
 			_overview_t = 1.0
@@ -1592,6 +1609,8 @@ func _update_inspector(prep: bool) -> void:
 	var show_ab := false
 	var show_fix := false
 	var show_sell := mine and prep
+	var show_invest := false
+	var show_noinv := false
 	if not t.is_empty():
 		_inspector_layout(_inspector_rect(m, t), mine, prep, int(t["lv"]))      # 첫 클릭이 버튼에 닿게 자리를 먼저
 		if mine:
@@ -1604,7 +1623,7 @@ func _update_inspector(prep: bool) -> void:
 		var lv := int(t["lv"])
 		if lv <= 2:
 			show_up = true
-			up_btn.disabled = not free and gold < int(d["up"][lv - 1])
+			up_btn.disabled = not free and gold < m.next_up_cost(t) - m.invest_gauge(t)
 		if lv == 2 and _branch_pick:
 			show_ab = true
 			show_prio = false
@@ -1616,6 +1635,21 @@ func _update_inspector(prep: bool) -> void:
 			fix_btn.disabled = int(m.players[s.seat]["mat"]) < GData.TRAP_REPAIR
 			fix_btn.position = sell_btn.position + Vector2(0, -40)
 			fix_btn.size = Vector2(_ly()["insp"].size.x - 16, 32)
+	if not t.is_empty() and not mine and int(t["lv"]) < 3:
+		show_invest = true
+		var cost := m.next_up_cost(t)
+		var gauge := m.invest_gauge(t)
+		var pay: int = maxi(int(floor(cost * GData.INVEST_SHARE / 10.0)) * 10, 10)
+		invest_btn.disabled = bool(t.get("noinv", false)) or gauge >= cost or int(m.players[s.seat]["gold"]) < m.invest_price(s.seat, mini(pay, cost - gauge))
+	if not t.is_empty() and mine and int(t["lv"]) < 3:
+		show_noinv = true
+	var rr := _inspector_rect(m, t) if not t.is_empty() else Rect2()
+	invest_btn.position = Vector2(rr.position.x + 8, rr.end.y - 56)
+	invest_btn.size = Vector2(rr.size.x - 16, 48)
+	noinv_btn.position = Vector2(rr.end.x - 96, rr.position.y + 6)
+	noinv_btn.size = Vector2(90, 28)
+	_vis(invest_btn, show_invest)
+	_vis(noinv_btn, show_noinv)
 	for k in prio_btns:
 		_vis(prio_btns[k], show_prio)
 	_vis(up_btn, show_up)
@@ -1737,8 +1771,22 @@ func _on_move() -> void:
 
 
 func _on_sell() -> void:
+	var t: Dictionary = s.m.towers.get(selected, {})
+	if not t.is_empty() and not (t.get("contrib", {}) as Dictionary).is_empty() and _sell_armed != selected:
+		_sell_armed = selected      # 남이 투자한 포탑은 한 번 더 확인
+		_say("팀원이 투자한 포탑이에요 · 한 번 더 누르면 판매하고 낸 비율대로 나눠요")
+		return
+	_sell_armed = -1
 	s.command({"op": "sell", "id": selected})
 	selected = -1
+
+
+func _on_invest() -> void:
+	s.command({"op": "invest", "id": selected})
+
+
+func _on_noinv() -> void:
+	s.command({"op": "noinv", "id": selected})
 
 
 ## 확정할 미리보기: 내 것, 없으면 동료의 제안 (내 자재로 확정)
@@ -2841,6 +2889,15 @@ func _banner(text: String, col: Color, danger := false) -> void:
 
 func _draw_tower(m: GMatch, t: Dictionary) -> void:
 	var at := _p(Vector2(int(t["x"]), int(t["y"])))
+	var contrib: Dictionary = t.get("contrib", {})
+	var li := 0
+	for k in contrib:
+		if li >= 3 or int(k) >= m.players.size():
+			break
+		var lp := _ev(at + Vector2(2, CELL - 10 - li * 8))
+		_prect(Rect2(lp, Vector2(6, 6)), OUTLINE)
+		_prect(Rect2(lp + Vector2(2, 2), Vector2(2, 2)), OWNER[int(m.players[int(k)].get("col", 0)) % 4])
+		li += 1
 	var owner_col := int(m.players[int(t["owner"])].get("col", 0)) % 4
 	var trap := GMatch.is_trap(t)
 	var broken := trap and int(t["uses"]) <= 0
@@ -3478,6 +3535,8 @@ func _draw_game() -> void:
 		_banner("보스 접근 · %s · 도착 시 본부 −15" % GData.ENEMIES[bt]["name"], DANGER, true)
 	elif m.phase == "prep" and _summary_t > 0.0 and not m.summary.is_empty():
 		_banner(_summary_text(m), AMBER)
+	elif _inv_note_t > 0.0:
+		_banner(_inv_note, AMBER)
 	elif _newrx_t > 0.0 and GData.REACTIONS.has(_newrx):
 		_banner("새 반응 · %s" % GData.REACTIONS[_newrx]["name"], Color(str(GData.REACTIONS[_newrx]["col"])))
 	elif _notice_t > 0.0 and _trans_t <= 0.0:
@@ -3763,6 +3822,10 @@ func _draw_arrows(m: GMatch) -> void:
 	var targets := []
 	for pg in s.pings:
 		targets.append([Vector2(float(pg["x"]), float(pg["y"])), OWNER[_col_of_seat(int(pg["seat"])) % 4]])
+	for id in m.towers:
+		var tt: Dictionary = m.towers[id]
+		if int(tt["owner"]) == s.seat and m.next_up_cost(tt) > 0 and m.invest_gauge(tt) >= m.next_up_cost(tt):
+			targets.append([Vector2(int(tt["x"]), int(tt["y"])) + Vector2(0.5, 0.5), OK_GREEN])
 	var cc := Vector2(GData.CASTLE.get_center())
 	for en in m.enemies:
 		var pos := Board.pos_on(m.board.paths[int(en["e"])], float(en["dist"]))
@@ -4448,13 +4511,37 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 		if stn != "":
 			more += " · 반응: " + ", ".join(GData.reactions_with(stn).map(func(k): return GData.REACTIONS[k]["name"]))
 		_tip(Vector2(r.position.x - 220, stat_box.get_center().y), more)
-	if not mine:
-		_tx(Rect2(r.position.x + 10, y + 8, r.size.x - 20, 24), "%s의 포탑" % str(owner["name"]).left(6), T.LABEL, SUB)
 
 
 ## 판매·강화·갈래 카드 글자 (버튼 판 위)
 func _draw_insp_buttons(m: GMatch, t: Dictionary, mine: bool, prep: bool, lv: int) -> void:
 	var d: Dictionary = GData.TOWERS[t["type"]]
+	var cost := m.next_up_cost(t)
+	var gauge := m.invest_gauge(t)
+	if cost > 0 and (gauge > 0 or not mine):      # 투자 게이지: 다음 강화까지 모인 돈
+		var r := _inspector_rect(m, t)
+		var gy: float = (invest_btn.position.y if invest_btn.visible else prio_btns["first"].position.y) - 34
+		var bar := Rect2(r.position.x + 10, gy + 20, r.size.x - 20, 8)
+		_tx(Rect2(r.position.x + 10, gy - 4, r.size.x - 20, 24), "강화 준비됨" if gauge >= cost else "다음 강화까지", T.LABEL, OK_GREEN if gauge >= cost else SUB)
+		_tx(Rect2(r.position.x + 10, gy - 4, r.size.x - 20, 24), "%d/%d" % [gauge, cost], T.KEY, AMBER, 2)
+		_prect(bar, OUTLINE)
+		var x := bar.position.x + 2
+		var inv: Dictionary = t.get("inv", {})
+		for k in inv:
+			var w := (bar.size.x - 4) * float(inv[k]) / cost
+			_prect(Rect2(x, bar.position.y + 2, w, 4), OWNER[int(m.players[int(k)].get("col", 0)) % 4])
+			x += w
+	if invest_btn.visible:
+		var ir := Rect2(invest_btn.position, invest_btn.size)
+		var pay: int = mini(maxi(int(floor(cost * GData.INVEST_SHARE / 10.0)) * 10, 10), maxi(cost - gauge, 0))
+		var why := "투자 +%d" % pay
+		if bool(t.get("noinv", false)):
+			why = "주인이 투자를 막음"
+		elif gauge >= cost:
+			why = "주인이 강화하면 돼요"
+		_tx(ir, why, T.BODY, AMBER_INK if not invest_btn.disabled else SUB, 1)
+	if noinv_btn.visible:
+		_tx(Rect2(noinv_btn.position, noinv_btn.size), "투자 허용" if bool(t.get("noinv", false)) else "투자 막기", T.LABEL, INK, 1)
 	if sell_btn.visible:
 		var sr := Rect2(sell_btn.position, sell_btn.size)
 		_tx(Rect2(sr.position + Vector2(0, 2), Vector2(sr.size.x, 26)), "환불" if bool(t.get("fresh", false)) else "판매", T.BODY, INK, 1)
@@ -4464,7 +4551,8 @@ func _draw_insp_buttons(m: GMatch, t: Dictionary, mine: bool, prep: bool, lv: in
 		var ink := AMBER_INK if not up_btn.disabled else SUB
 		var free := int(m.players[s.seat].get("free_up", 0)) > 0
 		_tx(Rect2(ur.position + Vector2(0, 2), Vector2(ur.size.x, 26)), "강화" if lv == 1 else "MK-3", T.BODY, ink, 1)
-		_tx(Rect2(ur.position + Vector2(0, 24), Vector2(ur.size.x, 22)), "FREE" if free else str(int(d["up"][0 if lv == 1 else 1])), T.KEY, ink, 1)
+		var left := maxi(m.next_up_cost(t) - m.invest_gauge(t), 0)
+		_tx(Rect2(ur.position + Vector2(0, 24), Vector2(ur.size.x, 22)), "FREE" if free or left == 0 else str(left), T.KEY, ink, 1)
 	if a_btn.visible:
 		for k in 2:
 			var b: Button = a_btn if k == 0 else b_btn
@@ -4668,7 +4756,7 @@ func _draw_result() -> void:
 	_nine(tb, "panel_steel")
 	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(200, 24)), "팀 기록", T.LABEL, SUB)
 	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(tb.size.x - 20, 24)), "함께 만든 피해 %s" % _kilo(m.joint_dmg), T.LABEL, AMBER, 2)
-	var cols := [["피해", 896.0], ["처치", 986.0], ["포탑", 1078.0], ["길", 1160.0]]
+	var cols := [["피해", 880.0], ["처치", 950.0], ["포탑", 1020.0], ["길", 1090.0], ["투자", 1170.0]]
 	for c in cols:
 		_tx(Rect2(c[1] - 40, tb.position.y + 8, 80, 24), c[0], T.LABEL, SUB, 1)
 	var top_dmg := -1
@@ -4700,9 +4788,9 @@ func _draw_result() -> void:
 		for id in m.towers:
 			if int(m.towers[id]["owner"]) == i:
 				towers += 1
-		var vals := [_kilo(float(p["dmg"])), str(int(p["kills"])), str(towers), str(int(p.get("roads", 0)))]
+		var vals := [_kilo(float(p["dmg"])), str(int(p["kills"])), str(towers), str(int(p.get("roads", 0))), str(int(p.get("inv", 0)))]
 		var cy := row.position.y + row.size.y * 0.5 - 16
-		for k in 4:
+		for k in 5:
 			_tx(Rect2(cols[k][1] - 40, row.position.y, 80, row.size.y), vals[k], T.STRONG if n <= 2 else T.LABEL, INK, 1)
 	# 가장 일 많이 한 포탑
 	var best := -1

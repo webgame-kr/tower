@@ -54,7 +54,7 @@ func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
 		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kits[i] is Array and not (kits[i] as Array).is_empty() else GData.DEFAULT_KIT.duplicate()
 		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
 			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
-			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0,
+			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0, "inv": 0,
 			"hand": [], "lock": "", "picked": false, "rerolls": 0})
 	_make_plan()
 	_deal()
@@ -304,6 +304,8 @@ func apply(seat: int, c: Dictionary) -> String:
 		"pick": err = _pick_kit(seat, c)
 		"lock": err = _lock(seat, c)
 		"reroll": err = _reroll(seat)
+		"invest": err = _invest(seat, c)
+		"noinv": err = _noinv(seat, c)
 		"ready": return _set_ready(seat, bool(c.get("v", true)))
 		_: return "알 수 없는 요청이에요"
 	if err == "":
@@ -413,7 +415,8 @@ func _build(seat: int, c: Dictionary) -> String:
 	_next_id += 1
 	var s := GData.tower_stats(type, 1, "")
 	towers[id] = {"id": id, "owner": seat, "type": type, "x": cell.x, "y": cell.y, "lv": 1, "branch": "",
-		"spent": cost, "prio": "strong" if type == "sniper" else "first", "cd": 0.0, "uses": int(s["uses"]), "heat": 0.0, "fresh": true}
+		"spent": cost, "prio": "strong" if type == "sniper" else "first", "cd": 0.0, "uses": int(s["uses"]), "heat": 0.0, "fresh": true,
+		"inv": {}, "contrib": {}, "noinv": false, "auto_t": 0.0}
 	return ""
 
 
@@ -444,8 +447,89 @@ func _sell(seat: int, c: Dictionary) -> String:
 	var t := _mine(seat, c)
 	if t.is_empty():
 		return "내 포탑만 팔 수 있어요"
-	players[seat]["gold"] += sell_value(t)
+	var value := sell_value(t)
+	var shares := tower_shares(t)
+	var given := 0
+	for k in shares:
+		if int(k) == seat:
+			continue
+		var part := int(floor(value * float(shares[k])))
+		players[int(k)]["gold"] += part
+		given += part
+	players[seat]["gold"] += value - given
 	towers.erase(int(t["id"]))
+	return ""
+
+
+## 포탑에 낸 돈의 비율 {자리: 비율} (주인 몫 포함)
+func tower_shares(t: Dictionary) -> Dictionary:
+	var contrib: Dictionary = t.get("contrib", {})
+	var total := maxf(float(t["spent"]), 1.0)
+	var others := 0.0
+	var out := {}
+	for k in contrib:
+		out[int(k)] = float(contrib[k]) / total
+		others += float(contrib[k])
+	out[int(t["owner"])] = float(out.get(int(t["owner"]), 0.0)) + maxf(total - others, 0.0) / total
+	return out
+
+
+func invest_gauge(t: Dictionary) -> int:
+	var g := 0
+	for k in t.get("inv", {}):
+		g += int(t["inv"][k])
+	return g
+
+
+func next_up_cost(t: Dictionary) -> int:
+	var lv := int(t["lv"])
+	if lv >= 3:
+		return 0
+	return int(GData.TOWERS[t["type"]]["up"][lv - 1])
+
+
+## 투자: 팀원 포탑의 다음 강화비 25% 를 낸다 (주인 동의 없이, 막기 전까지)
+func _invest(seat: int, c: Dictionary) -> String:
+	var id := int(c.get("id", -1))
+	if not towers.has(id):
+		return "없는 포탑이에요"
+	var t: Dictionary = towers[id]
+	if int(t["owner"]) == seat:
+		return "내 포탑은 강화 버튼으로 키워요"
+	if bool(t.get("noinv", false)):
+		return "주인이 투자를 막아 두었어요"
+	var cost := next_up_cost(t)
+	if cost <= 0:
+		return "이미 최고 단계예요"
+	var gauge := invest_gauge(t)
+	if gauge >= cost:
+		return "강화 준비가 끝났어요 · 주인이 강화하면 돼요"
+	var pay: int = maxi(int(floor(cost * GData.INVEST_SHARE / 10.0)) * 10, 10)
+	pay = mini(pay, cost - gauge)
+	var spend := invest_price(seat, pay)
+	if int(players[seat]["gold"]) < spend:
+		return "골드가 부족해요"
+	players[seat]["gold"] = int(players[seat]["gold"]) - spend
+	players[seat]["inv"] = int(players[seat].get("inv", 0)) + pay
+	var inv: Dictionary = t["inv"]
+	inv[seat] = int(inv.get(seat, 0)) + pay
+	var contrib: Dictionary = t["contrib"]
+	contrib[seat] = int(contrib.get(seat, 0)) + pay
+	t["spent"] = int(t["spent"]) + pay
+	fx.append({"k": "invest", "by": seat, "id": id, "n": pay, "o": int(t["owner"]), "full": invest_gauge(t) >= cost})
+	return ""
+
+
+## 투자에 실제로 드는 돈 (정비 역할은 20% 할인)
+func invest_price(seat: int, pay: int) -> int:
+	return pay
+
+
+func _noinv(seat: int, c: Dictionary) -> String:
+	var t := _mine(seat, c)
+	if t.is_empty():
+		return "내 포탑만 막을 수 있어요"
+	t["noinv"] = not bool(t.get("noinv", false))
 	return ""
 
 
@@ -463,14 +547,16 @@ func _upgrade(seat: int, c: Dictionary) -> String:
 	var branch := str(c.get("branch", ""))
 	if lv == 2 and branch != "a" and branch != "b":
 		return "강화 방향을 골라 주세요"
-	var cost: int = GData.TOWERS[t["type"]]["up"][lv - 1]
-	if int(players[seat].get("free_up", 0)) > 0:      # 보상으로 받은 무료 강화
+	var cost: int = maxi(GData.TOWERS[t["type"]]["up"][lv - 1] - invest_gauge(t), 0)
+	if cost > 0 and int(players[seat].get("free_up", 0)) > 0:      # 보상으로 받은 무료 강화
 		players[seat]["free_up"] = int(players[seat]["free_up"]) - 1
 		cost = 0
 	if players[seat]["gold"] < cost:
 		return "골드가 부족해요"
 	players[seat]["gold"] -= cost
 	t["spent"] = int(t["spent"]) + cost
+	t["inv"] = {}
+	t["auto_t"] = 0.0
 	t["lv"] = lv + 1
 	if lv == 2:
 		t["branch"] = branch
@@ -618,6 +704,17 @@ func _log_hp() -> void:
 	if hp_log.size() < wave:
 		hp_log.resize(wave)
 	hp_log[wave - 1] = hp
+
+
+## 피해 기록: 남이 투자한 포탑이면 낸 비율대로 나눠 갖는다
+func _credit(s: Dictionary, owner: int, dmg: float) -> void:
+	var id := int(s.get("tid", -1))
+	if id < 0 or not towers.has(id) or (towers[id].get("contrib", {}) as Dictionary).is_empty():
+		players[owner]["dmg"] += dmg
+		return
+	var shares := tower_shares(towers[id])
+	for k in shares:
+		players[int(k)]["dmg"] += dmg * float(shares[k])
 
 
 func _log_tower(s: Dictionary, owner: int, dmg: float, kill: bool) -> void:
@@ -797,6 +894,7 @@ func step(dt := GData.TICK) -> void:
 		puddle_t[k][0] = float(puddle_t[k][0]) - dt
 		if float(puddle_t[k][0]) <= 0.0:
 			puddle_t.erase(k)
+	_auto_upgrades(dt)
 	_move_enemies(dt)
 	if phase == "over":
 		return
@@ -804,6 +902,21 @@ func step(dt := GData.TICK) -> void:
 	_fire(dt)
 	if _queue.is_empty() and enemies.is_empty():
 		_finish_wave()
+
+
+func _auto_upgrades(dt: float) -> void:
+	for id in towers:
+		var t: Dictionary = towers[id]
+		var cost := next_up_cost(t)
+		if cost <= 0 or invest_gauge(t) < cost or players[int(t["owner"])]["online"]:
+			continue
+		t["auto_t"] = float(t.get("auto_t", 0.0)) + dt
+		if float(t["auto_t"]) >= GData.INVEST_AUTO:
+			var o := int(t["owner"])
+			var keep_gold: int = players[o]["gold"]
+			_upgrade(o, {"id": id, "branch": "a"})
+			players[o]["gold"] = keep_gold
+			version += 1
 
 
 func on_ice(c: Vector2i) -> bool:
@@ -1215,7 +1328,7 @@ func _hurt(en: Dictionary, s: Dictionary, owner: int, from_trap := false, spread
 		dmg -= absorbed
 	dmg = minf(dmg, float(en["hp"]))
 	en["hp"] = float(en["hp"]) - dmg
-	players[owner]["dmg"] += dmg
+	_credit(s, owner, dmg)
 	_log_tower(s, owner, dmg, float(en["hp"]) <= 0.0)
 	if dmg >= 12.0:
 		var at := _pos(en)
@@ -1496,7 +1609,8 @@ func to_data() -> Dictionary:
 	for id in towers:
 		var t: Dictionary = towers[id]
 		ts.append([t["id"], t["owner"], t["type"], t["x"], t["y"], t["lv"], t["branch"], t["spent"], t["prio"],
-			int(t.get("uses", 0)), snappedf(float(t.get("heat", 0.0)), 0.1), bool(t.get("fresh", false))])
+			int(t.get("uses", 0)), snappedf(float(t.get("heat", 0.0)), 0.1), bool(t.get("fresh", false)), _int_keys(t.get("inv", {})),
+			_int_keys(t.get("contrib", {})), bool(t.get("noinv", false))])
 	var dr := {}
 	for s in drafts:
 		dr[str(s)] = drafts[s]
@@ -1547,7 +1661,9 @@ func load_data(d: Dictionary) -> void:
 	for r in d["tw"]:
 		towers[int(r[0])] = {"id": int(r[0]), "owner": int(r[1]), "type": str(r[2]), "x": int(r[3]), "y": int(r[4]),
 			"lv": int(r[5]), "branch": str(r[6]), "spent": int(r[7]), "prio": str(r[8]), "cd": 0.0,
-			"uses": int(r[9]) if r.size() > 9 else 0, "heat": float(r[10]) if r.size() > 10 else 0.0, "fresh": bool(r[11]) if r.size() > 11 else false}
+			"uses": int(r[9]) if r.size() > 9 else 0, "heat": float(r[10]) if r.size() > 10 else 0.0, "fresh": bool(r[11]) if r.size() > 11 else false,
+			"inv": _from_wire(r[12]) if r.size() > 12 else {}, "contrib": _from_wire(r[13]) if r.size() > 13 else {}, "noinv": bool(r[14]) if r.size() > 14 else false,
+			"auto_t": 0.0}
 	drafts = {}
 	var dr: Dictionary = d.get("dr", {})
 	for s in dr:
@@ -1615,6 +1731,21 @@ func load_enemies(rows: Array) -> void:
 			"max": float(r[5]), "slow": float(r[6]), "slow_t": 0.0, "gh": bool(r[7]), "st": stt,
 			"stun": 1.0 if r.size() > 9 and bool(r[9]) else 0.0, "sh": float(r[10]) if r.size() > 10 else 0.0,
 			"sk": float(r[11]) if r.size() > 11 else 0.0, "cell": -1, "done": [], "rx_t": 0.0})
+
+
+func _int_keys(d: Dictionary) -> Dictionary:
+	var out := {}
+	for k in d:
+		out[str(k)] = int(d[k])
+	return out
+
+
+func _from_wire(d) -> Dictionary:
+	var out := {}
+	if d is Dictionary:
+		for k in d:
+			out[int(k)] = int(d[k])
+	return out
 
 
 ## 결과 화면용: 피해가 큰 포탑 3개만 보낸다

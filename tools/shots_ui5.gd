@@ -62,6 +62,8 @@ func _run() -> void:
 	var m: GMatch = p.m
 	await _save("u_pick")
 	g._kit_open = false
+	m.players[0]["kit"] = ["cannon", "gun", "cold", "spike"]
+	m.players[0]["picked"] = true
 	m.apply(0, {"op": "build", "type": "cannon", "x": 6, "y": 3})
 	GBot.play_prep(m, 1, true, true)
 	print("drafts ", m.drafts.keys())
@@ -77,6 +79,14 @@ func _run() -> void:
 	m.apply(0, {"op": "upgrade", "id": id, "branch": ""})
 	g.selected = id
 	await _save("u_inspect")
+	for k in m.towers:
+		if int(m.towers[k]["owner"]) == 1:
+			m.apply(1, {"op": "invest", "id": id})
+			g.selected = k
+			g._cam = Vector2(m.towers[k]["x"], m.towers[k]["y"]) + Vector2(-3, 0)
+			break
+	await _save("u_inspect_other")
+	g._cam = Vector2(10, 7)
 	g.selected = -1
 	_play_to(m, 5)
 	for k in 2:

@@ -365,7 +365,9 @@ static func fresh_unlocks(wave: int) -> Array:
 	if (wave - 1) % THEME_LEN != 0 or wave <= 1:
 		return []
 	return (UNLOCK[mini(theme_of(wave), UNLOCK.size() - 1)] as Array).filter(func(k): return TOWERS.has(k))
-const TRAP_REPAIR := 1        # 가시 덫개 수리에 드는 공사 자재
+const TRAP_REPAIR := 1
+const INVEST_SHARE := 0.25    # 투자 한 번 = 다음 강화비의 25% (10골드 단위로 내림)
+const INVEST_AUTO := 5.0      # 주인이 없으면 게이지가 찬 뒤 5초에 자동 강화        # 가시 덫개 수리에 드는 공사 자재
 
 # ── 적 ──
 ## heal 초당 회복(heal_r 칸 안), ice 빙판 위 속도 배율, slow_res 감속 저항, burrow [주기, 땅속 시간],

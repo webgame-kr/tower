@@ -98,6 +98,7 @@ func _begin() -> void:
 		m.players[i]["online"] = seats[i]["online"]
 		m.players[i]["col"] = seats[i]["col"]
 		m.players[i]["role"] = str(seats[i].get("role", ""))
+		m.players[i]["bot"] = str(seats[i]["token"]) == "bot"
 	m._deal()      # 화력은 카드 7장
 	m.auto_kits()
 	state = "game"

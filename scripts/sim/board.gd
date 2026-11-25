@@ -107,11 +107,7 @@ func synced(e: int, path: Array) -> Dictionary:
 		if o == e:
 			continue
 		var p: Array = paths[o]
-		var k := -1
-		for idx in p.size():
-			if old.has(p[idx]):
-				k = idx
-				break
+		var k := merge_index(p, old)
 		if k < 0:
 			continue
 		var jn := path.find(p[k])
@@ -124,16 +120,80 @@ func synced(e: int, path: Array) -> Dictionary:
 	return out
 
 
-## 두 길이 합류한 칸 목록 [칸, 길 a, 길 b]
+## p 가 o 에 합류하는 첫 칸 (그 칸부터 본부까지 o 와 같은 길). 없으면 -1
+static func merge_index(p: Array, o: Array) -> int:
+	if p.is_empty() or o.is_empty() or p[p.size() - 1] != o[o.size() - 1]:
+		return -1      # 끝(본부 앞 칸)이 다르면 합류가 아니다
+	var k := p.size() - 1
+	var j := o.size() - 1
+	while k > 0 and j > 0 and p[k - 1] == o[j - 1]:
+		k -= 1
+		j -= 1
+	return k
+
+
+## 두 길이 합류한 칸 목록 [칸, 길 a, 길 b] (a 가 b 에 합류하거나 그 반대)
 func junctions() -> Array:
 	var out := []
 	for a in paths.size():
 		for b in range(a + 1, paths.size()):
-			for c in paths[a]:
-				if paths[b].has(c):
-					out.append([c, a, b])
-					break
+			var k := merge_index(paths[a], paths[b])
+			if k >= 0:
+				out.append([paths[a][k], a, b])
 	return out
+
+
+## 교차로 목록 [칸, 길 a, 길 b]: 두 길이 한 칸만 공유하고 가로질러 지나간다
+static func crossings_of(all: Array) -> Array:
+	var out := []
+	var sets := []
+	for p in all:
+		var d := {}
+		for c in p:
+			d[c] = true
+		sets.append(d)
+	for a in all.size():
+		for b in range(a + 1, all.size()):
+			var pa: Array = all[a]
+			var pb: Array = all[b]
+			var shared := []
+			for c in pa:
+				if (sets[b] as Dictionary).has(c):
+					shared.append(c)
+			if shared.is_empty():
+				continue
+			var tail := {}
+			var ka := merge_index(pa, pb)
+			if ka >= 0:
+				for c in pa.slice(ka):
+					tail[c] = true
+			for c in shared:
+				if not tail.has(c):
+					out.append([c, a, b])
+	return out
+
+
+func crossings() -> Array:
+	return crossings_of(paths)
+
+
+## 합류한 공동 구간 칸 (두 길 이상이 본부까지 함께 쓰는 칸)
+func shared_cells() -> Dictionary:
+	var out := {}
+	for jn in junctions():
+		var p: Array = paths[int(jn[1])]
+		for c in p.slice(p.find(jn[0])):
+			out[c] = true
+	return out
+
+
+## 길 하나에 있는 교차로 수
+static func cross_count(all: Array, e: int) -> int:
+	var n := 0
+	for x in crossings_of(all):
+		if int(x[1]) == e or int(x[2]) == e:
+			n += 1
+	return n
 
 
 ## 새 경로의 공사 자재 비용 (늘어난 칸 - 옛 도로 칸). 줄이면 음수 = 돌려받음
@@ -170,20 +230,51 @@ func validate(e: int, path: Array, blockers: Dictionary, theme: int, cap: int, l
 			var step: Vector2i = c - path[idx - 1]
 			if absi(step.x) + absi(step.y) != 1:
 				return "길이 끊겨요"
-	for other in all.size():      # 다른 길과 겹치면 합류: 겹친 곳부터 본부까지 같은 길이어야 한다
+	var lanes2: Array = all.duplicate()
+	lanes2[e] = path
+	for other in all.size():      # 다른 길과 겹치면 합류(본부까지 같은 길) 아니면 교차(한 칸만 가로질러)
 		if other == e:
 			continue
 		var o: Array = all[other]
-		for k in path.size():
-			if o.has(path[k]):
-				if path.slice(k) != o.slice(o.find(path[k])):
-					return "다른 길과 겹쳐요 · 합류하면 본부까지 같은 길이어야 해요"
-				break
+		var km := merge_index(path, o)
+		var end := km if km >= 0 else path.size()
+		for k in end:
+			if not o.has(path[k]):
+				continue
+			var err := _cross_err(path, k, o)
+			if err != "":
+				return err
+	var xs := crossings_of(lanes2)
+	if not xs.is_empty():
+		var per := {}
+		for x in xs:
+			per[x[1]] = int(per.get(x[1], 0)) + 1
+			per[x[2]] = int(per.get(x[2], 0)) + 1
+		for l in per:
+			if int(per[l]) > CROSS_MAX:
+				return "교차로는 길마다 %d곳까지예요" % CROSS_MAX
 	var last: Vector2i = path[path.size() - 1]
 	for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
 		if is_castle(last + d):
 			return ""
 	return "본부까지 이어지지 않아요"
+
+
+const CROSS_MAX := 2
+
+
+## path 의 k 칸이 o 와 겹칠 때: 앞뒤 칸은 겹치지 않고 서로 직각으로 곧게 지나가야 교차로
+static func _cross_err(path: Array, k: int, o: Array) -> String:
+	var j := o.find(path[k])
+	if k == 0 or k == path.size() - 1 or j <= 0 or j == o.size() - 1:
+		return "다른 길과 겹쳐요 · 합류하면 본부까지 같은 길이어야 해요"
+	if o.has(path[k - 1]) or o.has(path[k + 1]):
+		return "다른 길과 겹쳐요 · 합류하면 본부까지 같은 길이어야 해요"
+	var d1: Vector2i = path[k + 1] - path[k - 1]
+	var d2: Vector2i = o[j + 1] - o[j - 1]
+	if absi(d1.x) + absi(d1.y) != 2 or absi(d2.x) + absi(d2.y) != 2 or d1.x * d2.x + d1.y * d2.y != 0 or (d1.x != 0 and d1.y != 0) or (d2.x != 0 and d2.y != 0):
+		return "교차로는 두 길이 곧게 가로질러야 해요"
+	return ""
 
 
 ## 봇·자동 감싸기용 후보: 곧은 구간을 ㄷ자(우회로) 또는 한쪽으로(굽잇길) 밀어낸 경로

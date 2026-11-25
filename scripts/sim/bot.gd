@@ -66,6 +66,10 @@ static func pick_hand(m: GMatch, seat: int) -> void:
 static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := false) -> Dictionary:
 	pick_hand(m, seat)
 	_chip_joints(m, seat)
+	for k in m.drafts.keys():      # 내 길로 들어오는 합류 제안은 받아 준다
+		var d: Dictionary = m.drafts[k]
+		if int(k) != seat and int(d.get("merge", -1)) >= 0 and m.lane_owner(int(d["merge"])) == seat:
+			m.apply(seat, {"op": "edit", "e": int(d["e"]), "path": d["path"]})
 	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
 	var suggestion := {}
 	if use_roads:

@@ -48,7 +48,7 @@ const HP_GROWTH := 0.22
 const MAT_START := 6
 const MAT_WAVE := 3
 const MAT_MAX := 12
-const PATH_BASE := 64         # 입구별 길이 상한 (초원), 테마마다 +8
+static var PATH_BASE := 70    # 입구별 길이 상한 (초원), 테마마다 +8 · 맵마다 다르다 (use_layout)
 const PATH_STEP := 8
 const KIT_SIZE := 4           # 이번 웨이브 공구함 (웨이브마다 카드에서 고른다)
 const HAND_SIZE := 6          # 준비 시작 때 나오는 카드 수
@@ -56,7 +56,7 @@ const REROLL_COST := 30       # 다시 뽑기 (웨이브마다 첫 번은 무료
 const TEAM_KIT_BONUS := 6     # 팀 공구함이 서로 다른 n종 이상이면 공사 자재 +1
 
 static var hp_mul := 4.6      # 적 체력 배율 (밸런스 조정용)
-static var budget_scale := {1: 0.85, 2: 0.85, 3: 0.92, 4: 1.0}
+static var budget_scale := {1: 0.75, 2: 0.75, 3: 0.92, 4: 0.78}
 static var hp_scale := {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.05}
 const DIFFICULTY := {"easy": [0.8, 0.85, "느긋"], "normal": [1.0, 1.0, "보통"], "hard": [1.25, 1.15, "빡빡"]}      # [적 체력, 위협 예산]
 static var difficulty := "normal"
@@ -76,6 +76,7 @@ static func use_layout(players: int) -> void:
 	W = int(L["W"])
 	H = int(L["H"])
 	CASTLE = L["castle"]
+	PATH_BASE = 70 if LAYOUT == "v2" else 86
 	LANDMARK = L["landmark"]
 	BASE_PATHS = L["base"]
 	EXTRA_PATHS = L["extra"]
@@ -428,6 +429,9 @@ const JOINT_FOUND := 0.4
 const JOINT_CHIP := 0.25      # 기여 한 번 = 합계의 25% (10골드 단위)
 const RELAY_RANGE := 1.0
 const RELAY_HASTE := 0.2
+const SHARED_DMG := 0.1      # 합류한 공동 구간 2칸 안 포탑 피해 +10%
+const SHARED_NEAR := 2
+const CROSS_WAIT := 0.3      # 교차로를 지나는 적이 멈칫하는 시간
 const RELAY_RX := 0.25
 const INVEST_SHARE := 0.25    # 투자 한 번 = 다음 강화비의 25% (10골드 단위로 내림)
 const INVEST_AUTO := 5.0      # 주인이 없으면 게이지가 찬 뒤 5초에 자동 강화        # 가시 덫개 수리에 드는 공사 자재

@@ -25,6 +25,8 @@ const TEX_TOWERS := preload("res://art/towers.png")
 const TEX_ENEMIES := preload("res://art/enemies.png")
 const TEX_JOINTS := preload("res://art/joints.png")      # 합동 설비 2x2 (한 칸 44x64)
 const JW := Vector2(44, 64)
+const TEX_HQ := preload("res://art/hq.png")      # 본부 3단계 (한 칸 104x136)
+const HQ := Vector2(104, 136)
 const TEX_ICONS := preload("res://art/icons.png")
 
 const STAGE := Vector2(1280, 720)
@@ -62,6 +64,7 @@ const CFG_DEFAULT := {"font": 100, "fx_low": false, "thick": false, "shake": 30,
 const OWNER := [Color("E0533D"), Color("3D6FD1"), Color("E9B935"), Color("38A672")]
 const OWNER_TEXT := [Color("FF8A78"), Color("7FA6F0"), Color("E9B935"), Color("5FCB97")]
 const MARK := ["●", "▲", "■", "◆"]
+const WEAPON := ["gun", "cannon", "cold", "magnet", "oil", "flame", "shock", "sniper", "signal"]      # 무기형: 쏘는 쪽을 본다
 const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "magnet": 3, "oil": 4, "flame": 5, "shock": 6, "sniper": 7, "signal": 8, "spike": 9,
 	"steam": 10, "crane": 11, "generator": 12, "conveyor": 13, "welder": 14, "cryo": 15, "searchlight": 16, "scrap": 17}
 const TW := Vector2(34, 50)                # 포탑 그림 한 칸 (픽셀): 아래 19줄이 그 칸
@@ -119,6 +122,8 @@ var _record_done := false
 var _flip := 0
 var _trail := {}
 var _face := {}
+var _hq_flash := 0.0     # 본부가 맞으면 잠깐 번쩍
+var _tface := {}      # 포탑 칸 -> 마지막으로 쏜 쪽 (-1 왼쪽, 1 오른쪽). 무기형 포탑은 그쪽을 본다
 var _wheel := {}              # 핑 휠: {at(격자), from(화면)}
 var _kit_sent := false
 const QUICK := ["여기 막아 줘", "골드 좀 나눠 줘", "길 늘려 줘", "준비 됐어"]               # 적이 바라보는 쪽 (좌우 반전)             # 길 그리기 중: {e, i, cells[], j}
@@ -1313,11 +1318,14 @@ func _take_fx() -> void:
 	for f in s.fx:
 		match str(f["k"]):
 			"shot":
+				if absf(float(f["tx"]) - float(f["x"])) > 0.2:
+					_tface[Vector2i(floori(float(f["x"])), floori(float(f["y"])))] = -1 if float(f["tx"]) < float(f["x"]) else 1
 				_fxs.append({"k": "shot", "ty": f["ty"], "a": Vector2(f["x"], f["y"]), "b": Vector2(f["tx"], f["ty2"]), "r": float(f["r"]), "t": 0.22, "life": 0.22})
 			"ability":
 				_fxs.append({"k": "ability", "a": Vector2(f["x"], f["y"]), "o": int(f["o"]), "t": 0.9, "life": 0.9})
 			"hit":
 				_shake = 1.0
+				_hq_flash = 0.16
 				_fxs.append({"k": "hit", "n": int(f["n"]), "t": 1.0, "life": 1.0})
 				_fxs.append({"k": "gate", "e": int(f.get("e", 0)), "n": int(f["n"]), "t": 1.4, "life": 1.4})
 			"early":
@@ -1373,10 +1381,15 @@ func _take_fx() -> void:
 func _update_camera(delta: float) -> void:
 	var m := s.m
 	_newrx_t -= delta
+	_hq_flash -= delta
 	_inv_note_t -= delta
 	if m.phase != _last_phase:
 		if m.phase == "prep" and _last_phase != "":
 			_overview_t = 1.0
+		if m.phase == "combat":
+			for jn in m.board.junctions():
+				_say("공동 구간 · %d·%d번 적이 함께 지나가요" % [int(jn[1]) + 1, int(jn[2]) + 1])
+				break
 		_last_phase = m.phase
 	if _overview_t > 0.0:
 		_overview_t -= delta
@@ -1978,7 +1991,7 @@ func _proposal(m: GMatch) -> Dictionary:
 		var d: Dictionary = m.drafts[k]
 		if _dismissed.get(int(k), []) == d["path"]:
 			continue
-		return {"seat": int(k), "e": int(d["e"]), "path": d["path"], "cost": int(d["cost"])}
+		return {"seat": int(k), "e": int(d["e"]), "path": d["path"], "cost": int(d["cost"]), "merge": int(d.get("merge", -1))}
 	return {}
 
 
@@ -2394,7 +2407,7 @@ func _mk(t: Dictionary) -> int:
 
 ## 지도 위 포탑: 칸 왼쪽 위(cell_pos)에 기초를 두고 위로 솟는다 (3/4 시점)
 ## 지도 위 포탑: 그림 아래 19줄이 칸, 위로 솟는다
-func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Vector2, cell_px: float, tint := Color.WHITE) -> void:
+func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Vector2, cell_px: float, tint := Color.WHITE, flip := false) -> void:
 	var mk := 0 if lv <= 1 else (1 if lv == 2 else (2 if branch == "a" else 3))
 	var k := cell_px / TILE
 	if GData.is_joint(type):
@@ -2402,6 +2415,9 @@ func _tower_sprite(type: String, lv: int, branch: String, col: int, cell_pos: Ve
 		draw_texture_rect_region(TEX_JOINTS, Rect2(ja.round(), JW * k), Rect2(int(GData.TOWERS[type]["art"]) * JW.x, 0, JW.x, JW.y), tint)
 		return
 	var at := cell_pos + Vector2(cell_px * 0.5 - TW.x * 0.5 * k, cell_px - TW.y * k)
+	if flip:      # 왼쪽을 본다: 폭을 음수로 그려 좌우 반전
+		draw_texture_rect_region(TEX_TOWERS, Rect2(at.round() + Vector2(TW.x * k, 0), Vector2(-TW.x * k, TW.y * k)), _tower_src(type, mk, col), tint)
+		return
 	draw_texture_rect_region(TEX_TOWERS, Rect2(at.round(), TW * k), _tower_src(type, mk, col), tint)
 
 
@@ -2673,6 +2689,65 @@ func _tag_spot(r: Rect2i) -> Vector2:
 	return _p(tries[0])
 
 
+## 길 주인 색 (주인 없는 새 입구 길은 호박색)
+func _lane_col(m: GMatch, e: int) -> Color:
+	var o := m.lane_owner(e)
+	return OWNER[int(m.players[o].get("col", 0)) % 4] if o >= 0 else AMBER
+
+
+## 공동 구간: 길 가장자리를 두 길 주인 색 줄무늬로, 합류점에 노란 표지판. 교차로: 노란 X + 두 길 색 모서리
+func _draw_shared(m: GMatch) -> void:
+	for jn in m.board.junctions():
+		var a := int(jn[1])
+		var b := int(jn[2])
+		var ca := _lane_col(m, a)
+		var cb := _lane_col(m, b)
+		var p: Array = m.board.paths[a]
+		var tail: Array = p.slice(p.find(jn[0]))
+		var on := {}
+		for c in tail:
+			on[c] = true
+		var w := maxf(2.0, CELL / TILE * 2.0)
+		for c in tail:
+			var at := _p(Vector2(c))
+			for d in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+				if on.has(c + d):
+					continue
+				var horiz: bool = d.y != 0
+				var n := 4
+				for k in n:      # 한 변을 4토막: 두 사람 색이 번갈아
+					var col := ca if (k + c.x + c.y) % 2 == 0 else cb
+					var seg := CELL / n
+					var r: Rect2
+					if horiz:
+						r = Rect2(at + Vector2(k * seg, 0.0 if d.y < 0 else CELL - w), Vector2(seg, w))
+					else:
+						r = Rect2(at + Vector2(0.0 if d.x < 0 else CELL - w, k * seg), Vector2(w, seg))
+					_prect(Rect2(_ev(r.position), _ev(r.size)), col)
+		var sign_at := _p(Vector2(jn[0]) + Vector2(0.5, 0.0))
+		_prect(Rect2(_ev(sign_at + Vector2(-1, -CELL * 0.5)), Vector2(2, CELL * 0.5)), OUTLINE)
+		var text := "%d·%d 합류" % [a + 1, b + 1]
+		var tw := _sz(text, T.LABEL).x + 12
+		var tr := Rect2(_ev(sign_at + Vector2(-tw * 0.5, -CELL * 0.5 - 22)), _ev(Vector2(tw, 22)))
+		_prect(tr, OUTLINE)
+		_prect(tr.grow(-2), Color("E9B935"))
+		_tx(tr, text, T.LABEL, Color("1A1612"), 1)
+	for x in m.board.crossings():
+		var at := _p(Vector2(x[0]))
+		var k := CELL / TILE
+		var ca := _lane_col(m, int(x[1]))
+		var cb := _lane_col(m, int(x[2]))
+		for i in range(3, 16):      # 노란 X (픽셀 계단)
+			var q := Vector2(i, i) * k
+			_prect(Rect2(_ev(at + q), _ev(Vector2(2, 2) * k)), Color("E9B935"))
+			_prect(Rect2(_ev(at + Vector2((18 - i) * k, i * k)), _ev(Vector2(2, 2) * k)), Color("E9B935"))
+		var dot := _ev(Vector2(3, 3) * k)
+		_prect(Rect2(_ev(at), dot), ca)
+		_prect(Rect2(_ev(at + Vector2(CELL, CELL)) - dot, dot), ca)
+		_prect(Rect2(_ev(at + Vector2(CELL, 0)) - Vector2(dot.x, 0), dot), cb)
+		_prect(Rect2(_ev(at + Vector2(0, CELL)) - Vector2(0, dot.y), dot), cb)
+
+
 func _zone_tag(center: Vector2, text: String, edge: Color) -> void:
 	var w := _sz(text, T.LABEL).x + 14
 	var x := clampf(center.x - w * 0.5, MAP.x, MAP.x + GData.W * CELL - w)
@@ -2754,25 +2829,30 @@ func _draw_over(theme := -1) -> void:
 	_draw_tex_clip(_tex(_theme if theme < 0 else theme, "over"), _frame_rect())
 
 
-## 체력이 줄면 연기·경고등·외벽 손상 (테마 장식과 별개)
-func _draw_castle_damage(m: GMatch) -> void:
-	var ratio := float(m.hp) / GData.CASTLE_HP
-	if ratio >= 0.75:
-		return
+## 본부 5x5: art/hq.png 3단계 (멀쩡 51~100 · 금·잔해 21~50 · 불·연기 20 이하).
+## 그림 104x136 의 아래 가운데가 5x5 칸 아래 가운데. 굴뚝 연기·지휘탑 불빛은 4프레임으로 움직인다.
+func _draw_hq(m: GMatch) -> void:
 	var r := GData.CASTLE
-	var at := _p(Vector2(r.position))
-	var size_px := Vector2(r.size) * CELL
-	_ppoly(PackedVector2Array([at + size_px * Vector2(0.14, 0.2), at + size_px * Vector2(0.24, 0.32), at + size_px * Vector2(0.18, 0.42)]), Color(0.05, 0.05, 0.05, 0.9), 1.6)
-	if ratio < 0.5:
-		_ppoly(PackedVector2Array([at + size_px * Vector2(0.86, 0.62), at + size_px * Vector2(0.76, 0.72), at + size_px * Vector2(0.82, 0.86)]), Color(0.05, 0.05, 0.05, 0.9), 1.6)
-		var blink := 0.45 + 0.55 * absf(sin(_tick * 4.0))
-		_pcircle(at + size_px * Vector2(0.5, 0.06), 3.2, Color(LAMP, blink))
-	if not fx_low:
-		var puffs := 3 if ratio >= 0.5 else 6
+	var k := CELL / TILE
+	var stage := 0 if m.hp > 50 else (1 if m.hp > 20 else 2)
+	var foot := _p(Vector2(r.position) + Vector2(r.size.x * 0.5, r.size.y))
+	var at := _ev(foot - Vector2(HQ.x * 0.5, HQ.y) * k)
+	var lit := Color(1.8, 1.7, 1.6) if _hq_flash > 0.0 else Color.WHITE
+	draw_texture_rect_region(TEX_HQ, Rect2(at, HQ * k), Rect2(stage * HQ.x, 0, HQ.x, HQ.y), lit)
+	var f := int(_tick * 4.0) % 4
+	var puffs := 2 + stage * 2
+	for ch in [Vector2(27, 6), Vector2(36, 10)]:      # 굴뚝 꼭대기 (그림 좌표)
 		for i in puffs:
-			var k := fmod(_tick * 0.45 + i / float(puffs), 1.0)
-			var p := at + size_px * Vector2(0.3 + 0.08 * i, 0.2) + Vector2(sin(k * 5.0 + i) * 5.0, -k * 26.0)
-			_pcircle(p, 3.0 + k * 6.0, Color(0.16, 0.16, 0.16, 0.42 * (1.0 - k)))
+			var rise := float((f + i * 2) % 8)
+			var sz := (2.0 + floorf(rise / 3.0)) * k
+			var p: Vector2 = at + (ch + Vector2(float((i + f) % 3) - 1.0, -2.0 - rise * 2.0)) * k
+			_prect(Rect2(_ev(p), Vector2(sz, sz)), Color("2A2B2C") if stage == 2 else Color("6E6F70"))
+	if f < 2:      # 지휘탑 꼭대기 등
+		_prect(Rect2(_ev(at + Vector2(86, 0) * k), Vector2(2, 2) * k), LAMP if stage > 0 else AMBER)
+	if stage == 2:      # 불: 두 곳이 번갈아 밝아진다
+		for spot in [Vector2(37, 40), Vector2(77, 58)]:
+			if (f + int(spot.x)) % 2 == 0:
+				_prect(Rect2(_ev(at + spot * k), Vector2(4, 4) * k), Color("F2B33D"))
 
 
 ## 환경 움직임. 수에 상한을 두고, 낮은 효과 설정에서는 더 줄인다
@@ -2897,6 +2977,11 @@ func _draw_draft_one(m: GMatch, edit: Dictionary, col: Color) -> void:
 		_prect(Rect2(c - Vector2(w, w) * 0.5, Vector2(w, w)), col)
 	for i in range(from + 1, to + 1):
 		_pdash(_p(Vector2(path[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(path[i]) + Vector2(0.5, 0.5)), WELL, 2.0, 6.0)
+	var f := m.new_merge(int(edit["e"]), path)
+	if f >= 0:      # 합류점: 노란 굵은 칸
+		var mc: Vector2i = path[Board.merge_index(path, m.board.paths[f])]
+		var ma := _p(Vector2(mc))
+		_prect(Rect2(_ev(ma), _ev(Vector2(CELL, CELL))), Color("E9B935"), false, 4.0)
 	var mv: Array = []
 	if m.drafts.has(int(edit.get("seat", -1))) and not bool(edit.get("live", false)):
 		mv = m.drafts[int(edit["seat"])].get("moves", [])
@@ -2992,13 +3077,22 @@ func _draw_draft_info(m: GMatch, edit: Dictionary) -> void:
 		var mouse := get_local_mouse_position() - _off
 		var lines := ["옛 구간 %d칸 → 새 구간 %d칸   자재 %s" % [removed, added, ("-%d" % cost) if cost > 0 else ("+%d" % -cost)],
 			"%s %d → %d칸" % [label, before, after], "%d번 길 %d → %d칸 / 최대 %d" % [e + 1, old.size(), path.size(), m.cap()]]
+		var f := m.new_merge(e, path)
+		if f >= 0:      # 팀원 길에 합류: 누구 길에, 길 길이, 공동 칸 수, 자재는 반씩
+			var k := Board.merge_index(path, m.board.paths[f])
+			var owner := m.lane_owner(f)
+			var direct := owner < 0 or owner == s.seat or m.chief_seat() == s.seat or bool(m.players[owner].get("bot", false)) or not bool(m.players[owner]["online"])
+			lines = ["%d번 길에 합류 · 이 칸부터 함께" % (f + 1), "%d번 길 %d → %d칸   자재 %s" % [e + 1, old.size(), path.size(), ("-%d" % cost) if cost > 0 else ("+%d" % -cost)],
+				"공동 %d칸 · %s" % [path.size() - k, "바로 확정" if direct else "자재 반씩"]]
+			if not direct:
+				lines.append("확정하면 %s 님에게 합류 제안이 가요" % m.players[owner]["name"])
 		var w := 0.0
 		for l in lines:
 			w = maxf(w, _sz(l, T.LABEL).x)
 		var bw := 0.0
 		for l in lines:
 			bw = maxf(bw, _sz(l, T.LABEL).x)
-		var br := Rect2(_ev(mouse + Vector2(22, -30)), _ev(Vector2(bw + 24, 76)))
+		var br := Rect2(_ev(mouse + Vector2(22, -30)), _ev(Vector2(bw + 24, 10 + lines.size() * 22)))
 		br.position.x = minf(br.position.x, 1020 - br.size.x)
 		_nine(br, "panel_dark")
 		_prect(br.grow(-2), AMBER, false, 2.0)
@@ -3038,7 +3132,8 @@ func _draw_tower(m: GMatch, t: Dictionary) -> void:
 	if trap:
 		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(0.55, 0.5, 0.5, 0.8) if broken else Color.WHITE)
 	else:
-		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(1.0, 0.6, 0.5) if float(t.get("heat", 0.0)) > 0.0 else Color.WHITE)
+		var flip := WEAPON.has(str(t["type"])) and int(_tface.get(Vector2i(int(t["x"]), int(t["y"])), 1)) < 0
+		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(1.0, 0.6, 0.5) if float(t.get("heat", 0.0)) > 0.0 else Color.WHITE, flip)
 	if trap:      # 남은 내구
 		var full := float(GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["uses"])
 		var ratio := clampf(float(t["uses"]) / maxf(full, 1.0), 0.0, 1.0)
@@ -3048,6 +3143,14 @@ func _draw_tower(m: GMatch, t: Dictionary) -> void:
 			_t(at + Vector2(CELL * 0.5, CELL * 0.2), "수리", T.LABEL, LAMP, 1)
 	if float(t.get("heat", 0.0)) > 0.0:
 		_t(at + Vector2(CELL * 0.5, -10), "과열", T.LABEL, FIRE, 1)
+	elif m.phase == "combat" and _zoom >= 2 and not trap and m.near_shared(t):      # 공동 구간 2칸 안: 피해 +10% (선택하면 글로)
+		var tag := "공동 +10%" if int(t["id"]) == selected else "+10%"
+		var st := T.LABEL if int(t["id"]) == selected else T.KEY
+		var tw := _sz(tag, st).x + 8
+		var tr := Rect2(_ev(at + Vector2(CELL - tw + 4, -CELL * 0.55)), _ev(Vector2(tw, 18 if st == T.KEY else 20)))
+		_prect(tr, OUTLINE)
+		_prect(tr.grow(-2), Color("24331F"))
+		_tx(tr, tag, st, OK_GREEN, 1)
 	if bool(cfg["pattern"]):      # 색 대신 무늬: 주인 기호를 크게
 		_tag(at + Vector2(CELL * 0.8, CELL * 0.18), owner_col, 11.0)
 	if int(t["id"]) == selected:
@@ -3703,15 +3806,11 @@ func _draw_game() -> void:
 		var ex: Array = GData.EXTRA_PATHS[m.board.extra]
 		for i in range(1, ex.size()):
 			_pdash(_p(Vector2(ex[i - 1]) + Vector2(0.5, 0.5)), _p(Vector2(ex[i]) + Vector2(0.5, 0.5)), Color(1, 1, 1, 0.28), 3.0, 7.0)
-	for jn in m.board.junctions():     # 합류 지점: 뚫리면 적이 한꺼번에 온다
-		var at := _p(Vector2(jn[0]) + Vector2(0.5, 0.5))
-		_dash_ring(at, CELL * 0.62, AMBER, 2.0)
-		_zone_tag(at + Vector2(0, -CELL * 0.95), "%d·%d번 합류" % [int(jn[1]) + 1, int(jn[2]) + 1], AMBER)
+	_draw_shared(m)                    # 합류한 공동 구간 테두리 · 합류 표지판 · 교차로
 	_draw_zones()                      # 실제 효과 구역
 	_draw_grid(m)
 	_draw_draft(m, edit)
-	_draw_over()                       # 04~05 작업장·랜드마크·본부·입구
-	_draw_castle_damage(m)
+	_draw_over()                       # 04~05 작업장·랜드마크·입구
 	var stand := []      # 서 있는 것은 아래쪽(y)이 큰 것을 나중에 그린다
 	for id in m.towers:
 		var t: Dictionary = m.towers[id]
@@ -3719,10 +3818,13 @@ func _draw_game() -> void:
 	for en in m.enemies:
 		var pos := Board.pos_on(m.board.paths[int(en["e"])], float(_disp.get(int(en["id"]), float(en["dist"]))))
 		stand.append([pos.y + 0.28, 1, en])
+	stand.append([float(GData.CASTLE.end.y) - 0.05, 2, null])      # 본부도 서 있는 것: 위쪽 포탑을 가린다
 	stand.sort_custom(func(a, b): return a[0] < b[0])
 	for row in stand:
 		if int(row[1]) == 0:
 			_draw_tower(m, row[2])
+		elif int(row[1]) == 2:
+			_draw_hq(m)
 		else:
 			_draw_enemy(m, row[2])
 	for wc in m.walls:      # 긴급 방벽
@@ -4231,7 +4333,10 @@ func _draw_side(m: GMatch) -> void:
 			var pe := int(prop["e"])
 			var after: Array = Board.unflat(prop["path"])
 			var d := after.size() - (m.board.paths[pe] as Array).size()
-			_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "%d번 길 %s%d칸" % [pe + 1, "+" if d >= 0 else "", d], T.LABEL, INK)
+			if int(prop.get("merge", -1)) >= 0:
+				_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "%d번 길 → %d번 길 합류 제안" % [pe + 1, int(prop["merge"]) + 1], T.LABEL, AMBER)
+			else:
+				_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "%d번 길 %s%d칸" % [pe + 1, "+" if d >= 0 else "", d], T.LABEL, INK)
 			if pr.has_point(get_local_mouse_position() - _off):
 				_tip(Vector2(pr.get_center().x, pr.end.y + 22), "%s · %s" % [who["name"], _proposal_reason(m, pe, after)])
 	if m.towers.has(selected):

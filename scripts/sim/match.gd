@@ -39,6 +39,9 @@ var _can_call := false       # 손님 쪽 사본: 호스트가 알려준 일찍 
 var is_copy := false
 var _wave_t := 0.0
 var _next_id := 1
+var _lane_sig := 0           # 길 모양이 바뀌면 공동 구간·교차로 캐시를 다시 만든다
+var _near_shared: Dictionary = {}
+var _cross_cells: Dictionary = {}
 var _undo: Dictionary = {}   # 자리 -> 같은 준비 단계의 길 수정 기록 (호스트만)
 
 
@@ -847,15 +850,35 @@ func _edit(seat: int, c: Dictionary) -> String:
 		path = Board.unflat(drafts[seat]["path"])
 	if path.is_empty():
 		return "먼저 길을 그려 주세요"
+	var drafter := -1
 	for s in drafts.keys():      # 동료의 제안을 내 자재로 확정할 수 있다
 		if int(s) != seat and int(drafts[s]["e"]) == e and drafts[s]["path"] == Board.flat(path):
-			drafts.erase(s)
+			drafter = int(s)
+	var held: Dictionary = drafts[drafter] if drafter >= 0 else {}
+	if drafter >= 0:
+		drafts.erase(drafter)
 	var r := check_route(seat, e, path)
 	if r.has("err"):
+		if drafter >= 0:
+			drafts[drafter] = held
 		return str(r["err"])
+	var f := new_merge(e, path)
+	if f >= 0 and drafter < 0:      # 팀원 길에 합류: 길 주인이 수락해야 확정 (반장은 바로)
+		var owner := lane_owner(f)
+		if owner >= 0 and owner != seat and chief_seat() != seat and bool(players[owner]["online"]) and not bool(players[owner].get("bot", false)):
+			drafts[seat] = {"e": e, "path": Board.flat(r["path"]), "cost": int(r["cost"]), "moves": r["moves"], "merge": f}
+			return "합류 제안을 보냈어요 · %s 님이 수락하면 확정돼요" % players[owner]["name"]
 	var cost := int(r["cost"])
-	if cost > int(players[seat]["mat"]):
-		return "공사 자재가 부족해요 (%d 필요)" % cost
+	var share := 0      # 합류 제안을 수락하면 자재는 반씩
+	if f >= 0 and drafter >= 0 and cost > 0:
+		share = mini(cost / 2, int(players[drafter]["mat"]))
+	if cost - share > int(players[seat]["mat"]):
+		if drafter >= 0:
+			drafts[drafter] = held
+		return "공사 자재가 부족해요 (%d 필요)" % (cost - share)
+	if share > 0:
+		players[drafter]["mat"] = int(players[drafter]["mat"]) - share
+		cost -= share
 	var back := []
 	for mv in r["moves"]:
 		var t: Dictionary = towers[int(mv[0])]
@@ -876,6 +899,23 @@ func _edit(seat: int, c: Dictionary) -> String:
 	for p in players:
 		p["ready"] = false
 	return ""
+
+
+## 기본 입구 길의 주인 (그 자리 사람). 테마마다 새로 열린 길은 주인이 없다
+func lane_owner(e: int) -> int:
+	return e if e < GData.lanes_for(players.size()) and e < players.size() else -1
+
+
+## path 로 바꾸면 새로 합류하게 되는 다른 길 (전에는 합류해 있지 않던 길). 없으면 -1
+func new_merge(e: int, path: Array) -> int:
+	var old: Array = board.paths[e]
+	for o in board.paths.size():
+		if o == e:
+			continue
+		var other: Array = board.paths[o]
+		if Board.merge_index(path, other) > 0 and Board.merge_index(old, other) < 0 and Board.merge_index(other, old) < 0:
+			return o
+	return -1
 
 
 func _role_income() -> void:
@@ -1174,6 +1214,32 @@ func on_lava(c: Vector2i) -> bool:
 	return theme() >= 3 and GData.CRACKS.has(c)
 
 
+## 공동 구간(합류한 뒤 함께 쓰는 길) 2칸 안 칸, 교차로 칸
+func lane_cache() -> void:
+	var h := board.paths.hash()
+	if h == _lane_sig:
+		return
+	_lane_sig = h
+	_near_shared = {}
+	for c in board.shared_cells():
+		for dy in range(-GData.SHARED_NEAR, GData.SHARED_NEAR + 1):
+			for dx in range(-GData.SHARED_NEAR, GData.SHARED_NEAR + 1):
+				_near_shared[c + Vector2i(dx, dy)] = true
+	_cross_cells = {}
+	for x in board.crossings():
+		_cross_cells[x[0]] = true
+
+
+func near_shared(t: Dictionary) -> bool:
+	lane_cache()
+	return _near_shared.has(Vector2i(int(t["x"]), int(t["y"])))
+
+
+func is_cross(c: Vector2i) -> bool:
+	lane_cache()
+	return _cross_cells.has(c)
+
+
 func _move_enemies(dt: float) -> void:
 	for en in enemies.duplicate():
 		if not enemies.has(en):
@@ -1193,7 +1259,9 @@ func _move_enemies(dt: float) -> void:
 		if on_ice(cell):
 			boost = float(d.get("ice", GData.ICE_SPEED))
 		var slow := move_slow(en)
-		if float(en.get("stun", 0.0)) <= 0.0:
+		if float(en.get("wait", 0.0)) > 0.0:      # 교차로에서 멈칫
+			en["wait"] = float(en["wait"]) - dt
+		elif float(en.get("stun", 0.0)) <= 0.0:
 			var nd: float = float(en["dist"]) + float(d["speed"]) * GData.SPEED_MUL * boost * (1.0 - slow) * dt
 			if not walls.is_empty():
 				var wi := ci + 1
@@ -1205,8 +1273,10 @@ func _move_enemies(dt: float) -> void:
 			if float(en["hp"]) <= 0.0:
 				_die(en, -1)
 				continue
-		if ci != int(en["cell"]):        # 새 칸에 들어섰다: 함정·빙판 자국
+		if ci != int(en["cell"]):        # 새 칸에 들어섰다: 함정·빙판 자국·교차로
 			en["cell"] = ci
+			if is_cross(cell):
+				en["wait"] = GData.CROSS_WAIT
 			if float(d.get("trail", 0.0)) > 0.0:
 				ice_t[cell] = float(d["trail"])
 			if puddle_t.has(cell):
@@ -1365,6 +1435,8 @@ func _fire(dt: float) -> void:
 		t["cd"] = float(s["cd"]) / (1.0 + _haste_at(at) + (GData.RELAY_HASTE if linked(int(t["id"])) else 0.0)) / (2.0 if float(t.get("over_t", 0.0)) > 0.0 else 1.0)
 		if role_of(owner) == "fire":
 			s["dmg"] = float(s["dmg"]) * (1.0 + GData.FIRE_DMG)
+		if near_shared(t):      # 합류한 공동 구간 2칸 안
+			s["dmg"] = float(s["dmg"]) * (1.0 + GData.SHARED_DMG)
 		if bool(s["st_alt"]):      # 증기탑: 냉기·화상 번갈아 (혼자서 열충격)
 			t["alt"] = not bool(t.get("alt", false))
 			s["st"] = "cold" if bool(t["alt"]) else "burn"
@@ -1969,7 +2041,7 @@ func load_data(d: Dictionary) -> void:
 	var dr: Dictionary = d.get("dr", {})
 	for s in dr:
 		var v: Dictionary = dr[s]
-		drafts[int(s)] = {"e": int(v["e"]), "path": v["path"], "cost": int(v["cost"]), "moves": v.get("moves", [])}
+		drafts[int(s)] = {"e": int(v["e"]), "path": v["path"], "cost": int(v["cost"]), "moves": v.get("moves", []), "merge": int(v.get("merge", -1))}
 	plan = d.get("wp", [])
 	seed_ = int(d.get("sd", 0))
 	summary = d.get("sm", {})

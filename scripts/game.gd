@@ -27,6 +27,10 @@ const TEX_JOINTS := preload("res://art/joints.png")      # 합동 설비 2x2 (�
 const JW := Vector2(44, 64)
 const TEX_HQ := preload("res://art/hq.png")      # 본부 3단계 (한 칸 104x136)
 const HQ := Vector2(104, 136)
+const TEX_TDIR := preload("res://art/towers_dir.png")      # 8방향 무기형 포탑 (tools/make_motion.py)
+const TEX_EDIR := preload("res://art/enemies_dir.png")     # 적 걷기·피격·쓰러짐
+const TEX_HQA := preload("res://art/hq_anim.png")          # 본부 대기·피격
+const TEX_RX := preload("res://art/react.png")             # 반응 터짐
 const TEX_ICONS := preload("res://art/icons.png")
 
 const STAGE := Vector2(1280, 720)
@@ -122,6 +126,23 @@ var _record_done := false
 var _flip := 0
 var _trail := {}
 var _face := {}
+var sfx: GSfx                 # 효과음 (scripts/sfx.gd)
+var _snd := {}                # 소리 낼 때를 알기 위한 지난 상태
+const TW_SFX := {"gun": "tw_gun", "cannon": "tw_cannon", "cold": "tw_frost", "magnet": "tw_magnet", "oil": "tw_oil", "flame": "tw_fire",
+	"shock": "tw_tesla", "sniper": "tw_sniper", "signal": "tw_signal", "spike": "tw_spike", "steam": "tw_steam", "crane": "tw_crane",
+	"generator": "tw_generator", "conveyor": "tw_conveyor", "welder": "tw_welder", "cryo": "tw_cryo", "searchlight": "tw_searchlight",
+	"scrap": "tw_scrap", "railgun": "tw_sniper", "chiller": "tw_cryo", "smelter": "tw_fire"}
+const RX_SFX := {"ignite": "ignite", "harden": "lock", "short": "short", "thermal": "thermal", "super": "supercond", "brittle": "brittle",
+	"emag": "emag", "melt": "heatarmor", "overheat": "overheat", "shatter": "shatter", "slip": "slip", "amp": "amplify"}
+const PING_SFX := {"look": "ping_look", "danger": "ping_warn", "build": "ping_build", "road": "ping_road", "mine": "ping_flag"}
+var _anim := {}          # 포탑 id -> {k: place|up|mk3, t}: 짓기·강화 움직임
+var _taim := {}          # 포탑 칸 -> 마지막으로 쏜 방향 (라디안)
+var _tshot := {}         # 포탑 칸 -> 마지막으로 쏜 시각 (반동·총구 불꽃)
+var _ehp := {}           # 적 id -> 지난 체력 (맞으면 한 칸 번쩍)
+var _ehit := {}
+var _banner_t := 9.0     # 웨이브 시작 띠가 들어온 뒤 시간
+var _hq_stage_t := 9.0   # 본부 단계가 바뀐 뒤 시간 (흔들림)
+var _hq_hit_t := 9.0     # 본부가 맞은 뒤 시간 (피격 그림)
 var _hq_flash := 0.0     # 본부가 맞으면 잠깐 번쩍
 var _tface := {}      # 포탑 칸 -> 마지막으로 쏜 쪽 (-1 왼쪽, 1 오른쪽). 무기형 포탑은 그쪽을 본다
 var _wheel := {}              # 핑 휠: {at(격자), from(화면)}
@@ -257,6 +278,8 @@ func _noto(weight: int) -> FontVariation:
 func _ready() -> void:
 	net = NetScript.new()
 	add_child(net)
+	sfx = GSfx.new()
+	add_child(sfx)
 	web = OS.has_feature("web") and net.available
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST      # 모든 것이 원본 640x360 의 정수 2배
@@ -344,6 +367,8 @@ func _btn(parent: Control, r: Rect2, text: String, cb: Callable, kind := "sec", 
 	b.add_theme_font_override("font", f[0])
 	b.add_theme_font_size_override("font_size", f[1])
 	b.pressed.connect(cb)
+	b.pressed.connect(func(): if sfx: sfx.play("ui_click"))
+	b.mouse_entered.connect(func(): if sfx and not b.disabled: sfx.play("ui_hover", 0.5))
 	_style(b, kind)
 	parent.add_child(b)
 	return b
@@ -1059,7 +1084,10 @@ func _process(delta: float) -> void:
 	if s != null:
 		s.tick(delta)
 		while not s.toasts.is_empty():
-			_say(str(s.toasts.pop_front()))
+			var msg := str(s.toasts.pop_front())
+			_say(msg)
+			if sfx and not msg.contains("제안을 보냈어요") and not msg.contains("수락했어요"):
+				sfx.play("bd_deny")
 		_route()
 		if _screen != "menu":
 			_take_chat()
@@ -1069,6 +1097,7 @@ func _process(delta: float) -> void:
 			_update_theme(delta)
 			_predict(delta)
 			_take_fx()
+			_sound_tick(s.m)
 			_update_hover()
 			_update_hud()
 			_update_chat_input(delta)
@@ -1318,12 +1347,21 @@ func _take_fx() -> void:
 	for f in s.fx:
 		match str(f["k"]):
 			"shot":
+				sfx.play(str(TW_SFX.get(str(f["ty"]), "")))
+				var tcell := Vector2i(floori(float(f["x"])), floori(float(f["y"])))
+				var aim := Vector2(float(f["tx"]) - float(f["x"]), float(f["ty2"]) - float(f["y"]))
+				if aim.length() > 0.2:
+					_taim[tcell] = aim.angle()
+				_tshot[tcell] = _tick
 				if absf(float(f["tx"]) - float(f["x"])) > 0.2:
 					_tface[Vector2i(floori(float(f["x"])), floori(float(f["y"])))] = -1 if float(f["tx"]) < float(f["x"]) else 1
 				_fxs.append({"k": "shot", "ty": f["ty"], "a": Vector2(f["x"], f["y"]), "b": Vector2(f["tx"], f["ty2"]), "r": float(f["r"]), "t": 0.22, "life": 0.22})
 			"ability":
 				_fxs.append({"k": "ability", "a": Vector2(f["x"], f["y"]), "o": int(f["o"]), "t": 0.9, "life": 0.9})
 			"hit":
+				sfx.play("hq_hit")
+				sfx.play("en_leak")
+				_hq_hit_t = 0.0
 				_shake = 1.0
 				_hq_flash = 0.16
 				_fxs.append({"k": "hit", "n": int(f["n"]), "t": 1.0, "life": 1.0})
@@ -1331,25 +1369,30 @@ func _take_fx() -> void:
 			"early":
 				_say("다음 웨이브를 일찍 불렀어요 · 전원 보너스 +%dG" % int(f["n"]))
 			"rx":
+				sfx.play("rx_" + str(RX_SFX.get(str(f["n"]), "ignite")))
 				_fxs.append({"k": "rx", "a": Vector2(f["x"], f["y"]), "n": str(f["n"]), "o": f.get("o", []), "amp": bool(f.get("amp", false)), "t": 0.8, "life": 0.8})
 			"newrx":
 				_newrx = str(f["n"])
 				_newrx_t = 2.0
 			"give":
+				sfx.play("bd_coin")
 				if int(f["to"]) == s.seat:
 					_inv_note = "%s이 %d골드%s" % [str(s.m.players[int(f["by"])]["name"]).left(6), int(f["n"]), " · 다시 뽑기 1회" if bool(f.get("drop", false)) else ""]
 					_inv_note_t = 2.0
 			"joint":
+				sfx.play("bd_joint_hit")
 				if int(f["by"]) != s.seat:
 					_inv_note = "%s · 합동 설비 기다림" % str(s.m.players[int(f["by"])]["name"]).left(6)
 					_inv_note_t = 2.0
 			"joint_done":
+				sfx.play("bd_joint_done")
 				_inv_note = "합동 설비 완성"
 				_inv_note_t = 2.0
 			"joint_sell":
 				_inv_note = "합동 설비 판매 동의 %d/%d" % [int(f["n"]), int(f["of"])]
 				_inv_note_t = 2.0
 			"invest":
+				sfx.play("bd_invest")
 				if int(f["o"]) == s.seat and s.m.towers.has(int(f["id"])):
 					var tt: Dictionary = s.m.towers[int(f["id"])]
 					_inv_note = "%s이 %s에 +%d" % [str(s.m.players[int(f["by"])]["name"]).left(6), GData.TOWERS[tt["type"]]["name"], int(f["n"])]
@@ -1361,8 +1404,12 @@ func _take_fx() -> void:
 			"puddle":
 				_fxs.append({"k": "puddle", "a": Vector2(f["x"], f["y"]), "t": float(f["t"]), "life": float(f["t"])})
 			"kill":
+				sfx.play("en_die_big" if bool(f.get("big", false)) else "en_die")
+				if GData.ENEMIES.has(str(f.get("type", ""))):
+					_fxs.append({"k": "die", "a": Vector2(f["x"], f["y"]), "look": GData.ENEMIES[str(f["type"])]["look"], "ty": str(f["type"]), "t": 0.33, "life": 0.33})
 				_fxs.append({"k": "kill", "a": Vector2(f["x"], f["y"]), "big": bool(f.get("big", false)), "t": 0.45, "life": 0.45})
 			"num":
+				sfx.play("en_hit", 0.7)
 				var at := Vector2(f["x"], f["y"])
 				var merged := false
 				for o in _fxs:
@@ -1372,9 +1419,74 @@ func _take_fx() -> void:
 						break
 				if not merged:
 					_fxs.append({"k": "num", "a": at, "n": int(f["n"]), "t": 0.8, "life": 0.8})
+			"build":
+				sfx.play("bd_place")
+				_anim[int(f["id"])] = {"k": "place", "t": 0.0}
+			"up":
+				sfx.play("bd_mk3" if bool(f.get("mk3", false)) else "bd_upgrade")
+				_anim[int(f["id"])] = {"k": "mk3" if bool(f.get("mk3", false)) else "up", "t": 0.0}
+			"sell":
+				sfx.play("bd_sell")
+				_fxs.append({"k": "sold", "a": Vector2(f["x"], f["y"]), "ty": str(f["type"]), "lv": int(f["lv"]), "br": str(f["branch"]), "t": 0.6, "life": 0.6})
+			"road":
+				sfx.play("rd_merge" if bool(f.get("merge", false)) else "rd_confirm")
+				if int(f.get("cross", 0)) > int(_snd.get("cross", 0)):
+					sfx.play("rd_cross")
+				_snd["cross"] = int(f.get("cross", 0))
+			"open":
+				sfx.play("wv_boss", 0.6)
 	s.fx = []
 	if _fxs.size() > 140:
 		_fxs = _fxs.slice(_fxs.size() - 140)
+
+
+## 상태가 바뀌는 순간의 소리: 웨이브 시작·보스·클리어·보상·패배, 본부 단계, 길 그리기, 제안, 핑, 채팅
+func _sound_tick(m: GMatch) -> void:
+	var ph := m.phase
+	var was := str(_snd.get("phase", ph))
+	if ph != was:
+		if ph == "combat":
+			sfx.play("wv_boss" if m.wave % GData.THEME_LEN == 0 else "wv_start")
+			if m.wave % GData.THEME_LEN == 0:
+				sfx.play("en_boss_roar", 0.8)
+			_banner_t = 0.0
+		elif was == "combat" and (ph == "prep" or ph == "reward"):
+			sfx.play("wv_clear")
+			if ph == "reward":
+				sfx.play("wv_reward")
+		elif ph == "over":
+			sfx.play("hq_destroy" if m.hp <= 0 else "wv_clear")
+			if m.hp <= 0:
+				sfx.play("wv_gameover")
+	_snd["phase"] = ph
+	var stage := 0 if m.hp > 50 else (1 if m.hp > 20 else 2)
+	if stage > int(_snd.get("stage", stage)):
+		sfx.play("hq_stage")
+		_hq_stage_t = 0.0
+	_snd["stage"] = stage
+	var cells := (_trail.get("cells", []) as Array).size()
+	if cells > int(_snd.get("trail", 0)):
+		sfx.play("rd_tick", 0.6)
+	_snd["trail"] = cells
+	var prop := _proposal(m)
+	var key := str(prop.get("path", ""))
+	if key != "" and key != str(_snd.get("prop", "")):
+		sfx.play("rd_proposal")
+	_snd["prop"] = key
+	var pn: int = s.ping_count
+	if pn > int(_snd.get("ping", pn)) and not s.pings.is_empty():
+		sfx.play(str(PING_SFX.get(str(s.pings[-1].get("kind", "look")), "ping_look")))
+	_snd["ping"] = pn
+	var last = s.chat[-1] if not s.chat.is_empty() else null
+	if last != null and not (last as Dictionary).has("x") and _snd.has("chat") and not is_same(last, _snd["chat"]):
+		sfx.play("ui_chat")
+	_snd["chat"] = last
+	if m.players.size() > s.seat:
+		var me: Dictionary = m.players[s.seat]
+		var rd := bool(me.get("ready", false))
+		if rd and not bool(_snd.get("ready", true)):
+			sfx.play("ui_ready")
+		_snd["ready"] = rd
 
 
 ## 카메라: WASD·방향키, 화면 가장자리, 준비 시작 때 x1 잠깐
@@ -1382,6 +1494,16 @@ func _update_camera(delta: float) -> void:
 	var m := s.m
 	_newrx_t -= delta
 	_hq_flash -= delta
+	_banner_t += delta
+	_hq_stage_t += delta
+	_hq_hit_t += delta
+	for id in _anim.keys():
+		_anim[id]["t"] = float(_anim[id]["t"]) + delta
+		if float(_anim[id]["t"]) > 0.6:
+			_anim.erase(id)
+	if _ehp.size() > 400:
+		_ehp = {}
+		_ehit = {}
 	_inv_note_t -= delta
 	if m.phase != _last_phase:
 		if m.phase == "prep" and _last_phase != "":
@@ -1959,6 +2081,7 @@ func _on_kit_pick(i: int) -> void:
 		_kit_pick.erase(k)
 	elif _kit_pick.size() < need:
 		_kit_pick.append(k)
+	sfx.play("ui_card")
 
 
 func _on_pick_go() -> void:
@@ -1972,12 +2095,14 @@ func _on_pick_go() -> void:
 
 func _on_reroll() -> void:
 	_kit_pick = []
+	sfx.play("ui_reroll")
 	s.command({"op": "reroll"})
 
 
 func _on_lock(i: int) -> void:
 	var kit: Array = s.m.players[s.seat]["kit"]
 	if i < kit.size():
+		sfx.play("ui_lock")
 		s.command({"op": "lock", "v": kit[i]})
 
 
@@ -1991,7 +2116,12 @@ func _proposal(m: GMatch) -> Dictionary:
 		var d: Dictionary = m.drafts[k]
 		if _dismissed.get(int(k), []) == d["path"]:
 			continue
-		return {"seat": int(k), "e": int(d["e"]), "path": d["path"], "cost": int(d["cost"]), "merge": int(d.get("merge", -1))}
+		var need: Array = d.get("need", [])
+		if not need.is_empty() and (not need.has(s.seat) or (d.get("ok", []) as Array).has(s.seat)):
+			continue      # 공동 구간 제안은 수락할 길 주인에게만
+		return {"seat": int(k), "e": int(d["e"]), "path": d["path"], "cost": int(d["cost"]), "merge": int(d.get("merge", -1)), "shared": not need.is_empty()}
+	if not m.offer.is_empty() and _dismissed.get(-1, []) != m.offer["path"]:      # 새 입구 길: 공동 구간 합류 제안
+		return {"seat": -1, "e": int(m.offer["e"]), "path": m.offer["path"], "cost": int(m.offer["cost"]), "merge": int(m.offer.get("merge", -1)), "shared": false}
 	return {}
 
 
@@ -2832,11 +2962,25 @@ func _draw_over(theme := -1) -> void:
 ## 본부 5x5: art/hq.png 3단계 (멀쩡 51~100 · 금·잔해 21~50 · 불·연기 20 이하).
 ## 그림 104x136 의 아래 가운데가 5x5 칸 아래 가운데. 굴뚝 연기·지휘탑 불빛은 4프레임으로 움직인다.
 func _draw_hq(m: GMatch) -> void:
+	_draw_hq_at(m.hp)
+
+
+func _draw_hq_at(hp: int) -> void:
 	var r := GData.CASTLE
 	var k := CELL / TILE
-	var stage := 0 if m.hp > 50 else (1 if m.hp > 20 else 2)
+	var stage := 0 if hp > 50 else (1 if hp > 20 else 2)
 	var foot := _p(Vector2(r.position) + Vector2(r.size.x * 0.5, r.size.y))
 	var at := _ev(foot - Vector2(HQ.x * 0.5, HQ.y) * k)
+	if _hq_stage_t < 0.45:      # 단계가 바뀌면 흔들린다
+		at.x += (2.0 if int(_hq_stage_t * 30.0) % 2 == 0 else -2.0) * k
+	if stage == 0:      # 멀쩡: 움직임 그림 (대기 8칸, 맞으면 피격 8칸)
+		var row := 0
+		var fr := int(_tick / 0.15) % 8
+		if _hq_hit_t < 0.72:
+			row = 1
+			fr = mini(int(_hq_hit_t / 0.09), 7)
+		draw_texture_rect_region(TEX_HQA, Rect2(_ev(at + DirData.HQ_OFF * k), Vector2(128, 152) * k), Rect2(fr * 128, row * 152, 128, 152))
+		return
 	var lit := Color(1.8, 1.7, 1.6) if _hq_flash > 0.0 else Color.WHITE
 	draw_texture_rect_region(TEX_HQ, Rect2(at, HQ * k), Rect2(stage * HQ.x, 0, HQ.x, HQ.y), lit)
 	var f := int(_tick * 4.0) % 4
@@ -2944,6 +3088,8 @@ func _draw_draft(m: GMatch, edit: Dictionary) -> void:
 		if int(k) != int(edit.get("seat", -1)):
 			var other := _draft_of(m, int(k))
 			_draw_draft_one(m, other, Color(OWNER[int(m.players[int(k)].get("col", 0)) % 4], 0.8))
+	if not m.offer.is_empty() and int(edit.get("e", -1)) != int(m.offer["e"]):      # 새 입구 합류 제안: 노란 점선
+		_draw_draft_one(m, {"e": int(m.offer["e"]), "path": Board.unflat(m.offer["path"]), "seat": -1}, Color(AMBER, 0.7))
 	if not edit.is_empty():
 		var col := AMBER if str(edit.get("err", "")) == "" else LAMP
 		_draw_draft_one(m, edit, col)
@@ -3132,8 +3278,14 @@ func _draw_tower(m: GMatch, t: Dictionary) -> void:
 	if trap:
 		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(0.55, 0.5, 0.5, 0.8) if broken else Color.WHITE)
 	else:
-		var flip := WEAPON.has(str(t["type"])) and int(_tface.get(Vector2i(int(t["x"]), int(t["y"])), 1)) < 0
-		_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at, CELL, Color(1.0, 0.6, 0.5) if float(t.get("heat", 0.0)) > 0.0 else Color.WHITE, flip)
+		var tint := Color(1.0, 0.6, 0.5) if float(t.get("heat", 0.0)) > 0.0 else Color.WHITE
+		if DirData.TOWER_ROW.has(str(t["type"])):
+			_tower_dir(t, owner_col, at, tint)
+		else:
+			var flip := WEAPON.has(str(t["type"])) and int(_tface.get(Vector2i(int(t["x"]), int(t["y"])), 1)) < 0
+			var dy := _place_drop(int(t["id"]))
+			_tower_sprite(t["type"], int(t["lv"]), str(t["branch"]), owner_col, at + Vector2(0, dy), CELL, tint, flip)
+			_build_fx(int(t["id"]), at)
 	if trap:      # 남은 내구
 		var full := float(GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["uses"])
 		var ratio := clampf(float(t["uses"]) / maxf(full, 1.0), 0.0, 1.0)
@@ -3158,6 +3310,70 @@ func _draw_tower(m: GMatch, t: Dictionary) -> void:
 		var center := at + Vector2(CELL, CELL) * 0.5
 		_parc(center, radius, 0, TAU, 0, Color.WHITE)
 		_corners(at, AMBER)
+
+
+## 짓기 움직임: 위에서 떨어져 내려앉는다 (0.2초)
+func _place_drop(id: int) -> float:
+	var a: Dictionary = _anim.get(id, {})
+	if str(a.get("k", "")) != "place" or float(a["t"]) >= 0.2:
+		return 0.0
+	var p := 1.0 - float(a["t"]) / 0.2
+	return -roundf(p * p * 14.0) * CELL / TILE
+
+
+## 짓기 먼지·강화 번쩍·MK-3 고리
+func _build_fx(id: int, at: Vector2) -> void:
+	var a: Dictionary = _anim.get(id, {})
+	if a.is_empty():
+		return
+	var t := float(a["t"])
+	var k := CELL / TILE
+	var foot := at + Vector2(CELL * 0.5, CELL - 3.0 * k)
+	match str(a["k"]):
+		"place":
+			if t >= 0.15 and t < 0.5:
+				var q := (t - 0.15) / 0.35
+				for side in [-1.0, 1.0]:
+					for n in 2:
+						var p := foot + Vector2(side * (6.0 + q * 10.0 + n * 4.0), -q * 6.0 - n * 2.0) * k
+						_prect(Rect2(_ev(p), _ev(Vector2(3, 3) * k)), Color(0.62, 0.6, 0.55, 1.0 - q))
+		"up", "mk3":
+			if t < 0.35:
+				var q := t / 0.35
+				for n in 4:      # 위로 오르는 불꽃
+					var p := foot + Vector2((n - 1.5) * 6.0, -14.0 - q * 18.0 - n * 3.0) * k
+					_prect(Rect2(_ev(p), _ev(Vector2(2, 2) * k)), AMBER if n % 2 == 0 else Color.WHITE)
+			if str(a["k"]) == "mk3" and t < 0.5:
+				_dash_ring(foot + Vector2(0, -8.0 * k), CELL * (0.3 + t * 1.4), AMBER, 2.0, 1.0 - t / 0.5)
+
+
+## 8방향 무기형 포탑: 마지막으로 쏜 쪽을 보고, 쏘면 1px 반동과 총구 불꽃
+func _tower_dir(t: Dictionary, col: int, at: Vector2, tint: Color) -> void:
+	var type := str(t["type"])
+	var lv := int(t["lv"])
+	var li := 0 if lv <= 1 else (1 if lv == 2 else (2 if str(t["branch"]) == "a" else 3))
+	var cell := Vector2i(int(t["x"]), int(t["y"]))
+	var ang: float = _taim.get(cell, 0.0)
+	var di := posmod(roundi(ang / (PI / 4.0)), 8)
+	var k := CELL / TILE
+	var since := _tick - float(_tshot.get(cell, -9.0))
+	var kick := Vector2.ZERO
+	if since < 0.07:
+		kick = -Vector2.from_angle(ang).round() * k
+	var foot := at + Vector2(CELL * 0.5, CELL - 3.0 * k + _place_drop(int(t["id"])))
+	var pos := _ev(foot - DirData.FOOT * k + kick)
+	var src := Rect2(((li * 4 + col) * 8 + di) * 48, int(DirData.TOWER_ROW[type]) * 48, 48, 48)
+	draw_texture_rect_region(TEX_TDIR, Rect2(pos, Vector2(48, 48) * k), src, tint)
+	var a: Dictionary = _anim.get(int(t["id"]), {})
+	if (str(a.get("k", "")) == "up" or str(a.get("k", "")) == "mk3") and float(a["t"]) < 0.12:      # 강화 순간 하얗게
+		draw_texture_rect_region(TEX_TDIR, Rect2(pos, Vector2(48, 48) * k), src, Color(4, 4, 4, 0.9))
+	if since < 0.06 and ["gun", "cannon", "sniper", "flame", "oil", "cold"].has(type):
+		var mz: Vector2 = DirData.MUZZLE[type][li][di]
+		var mp := pos + mz * k
+		var sz := (4.0 if type != "cannon" else 6.0) * k
+		_prect(Rect2(_ev(mp - Vector2(sz, sz) * 0.5), _ev(Vector2(sz, sz))), Color("F2B33D") if type != "cold" else ICE)
+		_prect(Rect2(_ev(mp - Vector2(1, 1) * k), _ev(Vector2(2, 2) * k)), Color.WHITE)
+	_build_fx(int(t["id"]), at)
 
 
 ## 합동 설비: 기초는 비계(낸 만큼 올라감) + 남은 값, 완성되면 그림 + 기여한 사람 색 줄무늬
@@ -3209,12 +3425,26 @@ func _draw_enemy(m: GMatch, en: Dictionary) -> void:
 	if absf(dir.x) > 0.02:
 		_face[int(en["id"])] = -1.0 if dir.x < 0.0 else 1.0
 	var face: float = _face.get(int(en["id"]), 1.0)
-	var origin := (foot - Vector2(22, 38) * unit * Vector2(face, 1.0)).round()
+	var row := 2      # 남 0 · 북 1 · 동 2 (서는 동을 뒤집음)
+	if absf(dir.y) > absf(dir.x) * 1.2:
+		row = 0 if dir.y > 0.0 else 1
+		face = 1.0
+	var id := int(en["id"])
+	var hpv := float(en["hp"])
+	if hpv < float(_ehp.get(id, hpv)) - float(en["max"]) * 0.03 and _tick - float(_ehit.get(id, -9.0)) > 0.3:      # 크게 맞을 때만 번쩍
+		_ehit[id] = _tick
+	if not _ehit.has(id) or _tick - float(_ehit[id]) > 0.3:
+		_ehp[id] = hpv
+	var frame := int((_tick + id * 0.137) * 1000.0 / 110.0) % 4
+	if _tick - float(_ehit.get(id, -9.0)) < 0.08:
+		frame = 4
+	var li := int(look[0])
+	var origin := (foot - Vector2(28, DirData.ENEMY_FOOT[li]) * unit * Vector2(face, 1.0)).round()
 	draw_set_transform(_off + origin, 0.0, Vector2(face, 1.0))
 	var tint := Color(0.72, 1, 0.92, 0.42) if ghost else Color.WHITE
 	if str(look[1]) != "":
 		tint = tint * Color.WHITE.lerp(Color(str(look[1])), 0.55)
-	draw_texture_rect_region(TEX_ENEMIES, Rect2(Vector2.ZERO, EW * unit), Rect2(int(look[0]) * EW.x, 0, EW.x, EW.y), tint)
+	draw_texture_rect_region(TEX_EDIR, Rect2(Vector2.ZERO, Vector2(56, 44) * unit), Rect2(frame * 56, (li * 3 + row) * 44, 56, 44), tint)
 	draw_set_transform(_off)
 	if ghost:
 		_dash_ring(center, size_px * 0.52, Color("7FE8D0"), 1.6)
@@ -3271,6 +3501,19 @@ func _draw_fx() -> void:
 				var rr := GData.ABILITY_RADIUS * CELL
 				_pcircle(c, rr, Color(ICE, k * 0.3))
 				_dash_ring(c, rr * (1.15 - k * 0.15), Color.WHITE, 2.4, k)
+			"die":      # 쓰러짐 3칸 (적 그림 5-7)
+				var look: Array = f["look"]
+				var li := int(look[0])
+				var unit := _enemy_px(str(f["ty"]))
+				var fr := 5 + mini(int((1.0 - k) * 3.0), 2)
+				var foot := _p(f["a"] * 1.0) + Vector2(0, CELL * 0.3)
+				var o := (foot - Vector2(28, DirData.ENEMY_FOOT[li]) * unit).round()
+				var tint := Color.WHITE if str(look[1]) == "" else Color.WHITE.lerp(Color(str(look[1])), 0.55)
+				draw_texture_rect_region(TEX_EDIR, Rect2(o, Vector2(56, 44) * unit), Rect2(fr * 56, li * 3 * 44, 56, 44), tint)
+			"sold":      # 판매: 가라앉으며 흐려진다
+				var q := 1.0 - k
+				var at := _p(f["a"] * 1.0) + Vector2(0, roundf(q * 8.0) * CELL / TILE)
+				_tower_sprite(str(f["ty"]), int(f["lv"]), str(f["br"]), 0, at, CELL, Color(1, 1, 1, k))
 			"kill":
 				var c := _p(f["a"] * 1.0)
 				var big: bool = f["big"]
@@ -3280,6 +3523,12 @@ func _draw_fx() -> void:
 					var d := Vector2.from_angle(TAU * n / 6.0 + 0.4)
 					_pline(c + d * rr * 0.6, c + d * rr * 1.1, Color(1, 0.7, 0.3, k), 2.0)
 			"rx":
+				if DirData.RX_ROW.has(str(f["n"])):      # 터짐 그림 (반응 시트 2-7칸)
+					var u := CELL / TILE
+					var fr := 2 + mini(int((1.0 - k) * 6.0), 5)
+					var foot := _p(f["a"] * 1.0) + Vector2(0, CELL * 0.3)
+					var o := _ev(foot - Vector2(32, 44) * u)
+					draw_texture_rect_region(TEX_RX, Rect2(o, Vector2(64, 56) * u), Rect2(fr * 64, int(DirData.RX_ROW[str(f["n"])]) * 56, 64, 56))
 				var c := _p(f["a"] * 1.0) + Vector2(0, -CELL * 0.9 - (1.0 - k) * 16.0)
 				var rd: Dictionary = GData.REACTIONS[str(f["n"])]
 				var label := str(rd["name"]) + (" ×2" if bool(f["amp"]) else "")
@@ -3426,10 +3675,34 @@ func _draw() -> void:
 		"result":
 			if s != null:
 				_draw_result()
+	if _screen == "game" and s != null and s.m != null and s.m.phase == "combat" and _banner_t < 1.8:
+		_draw_wave_slide(s.m)
 	if _paused or _panel != "":
 		_draw_pause()
 	if _toast_t > 0.0 and _screen != "game":
 		_tip(Vector2(640, 118), _toast)
+
+
+## 웨이브 시작: 띠가 왼쪽에서 들어와 1초 머문 뒤 오른쪽으로 빠진다
+func _draw_wave_slide(m: GMatch) -> void:
+	var boss := m.wave % GData.THEME_LEN == 0
+	var text := "WAVE %02d" % m.wave
+	var w := 300.0
+	var x := 640.0 - w * 0.5
+	if _banner_t < 0.25:
+		var q := 1.0 - _banner_t / 0.25
+		x -= q * q * 700.0
+	elif _banner_t > 1.5:
+		var q := (_banner_t - 1.5) / 0.3
+		x += q * q * 700.0
+	var r := Rect2(_ev(Vector2(x, 206)), Vector2(w, 52))
+	_prect(r, OUTLINE)
+	_prect(r.grow(-2), Color("1A1714"))
+	for i in 3:      # 왼쪽 경고 줄무늬
+		_prect(Rect2(r.position + Vector2(8 + i * 8, 8), Vector2(4, 36)), DANGER if boss else AMBER)
+	_tx(Rect2(r.position + Vector2(40, 0), Vector2(w - 50, r.size.y)), text, T.BIG, DANGER if boss else AMBER)
+	if boss:
+		_tx(Rect2(r.position + Vector2(40, 0), Vector2(w - 54, r.size.y)), "대장", T.STRONG, INK, 2)
 
 
 func _draw_title(at: Vector2, _px: int) -> void:
@@ -3451,10 +3724,11 @@ func _draw_menu() -> void:
 	for path in Board.new(2).paths:
 		_draw_road(path, 0)
 	_draw_tex_clip(_tex(0, "over"), _frame_rect_for(0))
-	var demo := [["cannon", Vector2i(13, 5), 0], ["sniper", Vector2i(14, 6), 1], ["gun", Vector2i(18, 6), 0], ["shock", Vector2i(24, 14), 1],
-		["cold", Vector2i(27, 17), 0], ["cannon", Vector2i(22, 17), 1], ["gun", Vector2i(16, 8), 1], ["flame", Vector2i(24, 18), 0]]
+	var demo := [["cannon", Vector2i(29, 7), 0], ["sniper", Vector2i(28, 3), 1], ["gun", Vector2i(26, 6), 0], ["shock", Vector2i(29, 14), 1],
+		["cold", Vector2i(24, 18), 0], ["cannon", Vector2i(25, 14), 1], ["gun", Vector2i(30, 3), 1], ["flame", Vector2i(26, 17), 0]]
 	for d in demo:
 		_tower_sprite(d[0], 2, "", d[2], _p(Vector2(d[1])), CELL)
+	_draw_hq_at(100)
 	_shake = keep
 	# 왼쪽 판 + 디더 가장자리
 	_prect(Rect2(-_off.x, -_off.y, 380 + _off.x, v.y), Color("1A1917"))
@@ -3770,6 +4044,14 @@ func _draw_schematic(r: Rect2, m = null) -> void:
 	for e in lanes.size():
 		for cell in lanes[e]:
 			_prect(Rect2(at + Vector2(cell) * c, Vector2(c, c)), LAMP if e == worst else Color("A8A296"))
+	if m != null:      # 공동 구간: 두 길 주인 색 점선
+		for jn in m.board.junctions():
+			var p: Array = m.board.paths[int(jn[1])]
+			var k := 0
+			for cell in p.slice(p.find(jn[0])):
+				var col := _lane_col(m, int(jn[1])) if k % 2 == 0 else _lane_col(m, int(jn[2]))
+				_prect(Rect2(at + Vector2(cell) * c + Vector2(c * 0.25, c * 0.25), Vector2(c * 0.5, c * 0.5)), col)
+				k += 1
 	var cs := GData.CASTLE
 	_prect(Rect2(at + Vector2(cs.position) * c, Vector2(cs.size) * c), OUTLINE)
 	_prect(Rect2(at + Vector2(cs.position) * c + Vector2(2, 2), Vector2(cs.size) * c - Vector2(4, 4)), Color("8C939A"))
@@ -4327,14 +4609,18 @@ func _draw_side(m: GMatch) -> void:
 			var pr: Rect2 = L["prop"]
 			_nine(pr, "panel_steel")
 			_prect(Rect2(pr.position + Vector2(4, 6), Vector2(4, pr.size.y - 12)), AMBER)
-			var who: Dictionary = m.players[int(prop["seat"])]
+			var who: Dictionary = m.players[int(prop["seat"])] if int(prop["seat"]) >= 0 else {"name": "새 입구", "col": -1}
 			_prect(Rect2(pr.position + Vector2(16, 14), Vector2(12, 12)), OUTLINE)
-			_prect(Rect2(pr.position + Vector2(18, 16), Vector2(8, 8)), OWNER[int(who.get("col", 0)) % 4])
+			_prect(Rect2(pr.position + Vector2(18, 16), Vector2(8, 8)), OWNER[int(who.get("col", 0)) % 4] if int(who.get("col", 0)) >= 0 else AMBER)
 			var pe := int(prop["e"])
 			var after: Array = Board.unflat(prop["path"])
 			var d := after.size() - (m.board.paths[pe] as Array).size()
-			if int(prop.get("merge", -1)) >= 0:
+			if int(prop["seat"]) < 0:
+				_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "새 %d번 길 → 공동 구간 합류" % (pe + 1), T.LABEL, AMBER)
+			elif int(prop.get("merge", -1)) >= 0:
 				_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "%d번 길 → %d번 길 합류 제안" % [pe + 1, int(prop["merge"]) + 1], T.LABEL, AMBER)
+			elif bool(prop.get("shared", false)):
+				_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "%d번 길 공동 구간 변경" % (pe + 1), T.LABEL, AMBER)
 			else:
 				_tx(Rect2(pr.position + Vector2(36, 8), Vector2(pr.size.x - 44, 24)), "%d번 길 %s%d칸" % [pe + 1, "+" if d >= 0 else "", d], T.LABEL, INK)
 			if pr.has_point(get_local_mouse_position() - _off):
@@ -5146,6 +5432,11 @@ func _draw_result() -> void:
 	_nine(tb, "panel_steel")
 	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(200, 24)), "팀 기록", T.LABEL, SUB)
 	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(tb.size.x - 20, 24)), "함께 만든 피해 %s" % _kilo(m.joint_dmg), T.LABEL, AMBER, 2)
+	var together := m.board.shared_cells().size()
+	if together > 0 or m.shared_kills > 0:      # 합류·교차 협동 기록
+		var sr := Rect2(tb.position.x, tb.end.y + 6, tb.size.x, 32)
+		_nine(sr, "panel_dark")
+		_tx(Rect2(sr.position + Vector2(10, 0), sr.size - Vector2(20, 0)), "함께 막은 구간 %d칸 · 공동 구간에서 막은 적 %d" % [together, m.shared_kills], T.LABEL, AMBER)
 	var cols := [["피해", 880.0], ["처치", 950.0], ["포탑", 1020.0], ["길", 1090.0], ["투자", 1170.0]]
 	for c in cols:
 		_tx(Rect2(c[1] - 40, tb.position.y + 8, 80, 24), c[0], T.LABEL, SUB, 1)

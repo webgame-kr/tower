@@ -127,8 +127,8 @@ func _roads() -> void:
 	var broken: Array = (GData.BASE_PATHS[0] as Array).duplicate()
 	broken.remove_at(5)
 	ok(e.board.validate(0, broken, {}, 0, e.cap()) != "", "끊긴 길 불가")
-	var spliced := e.board.spliced(0, 3, 1, [Vector2i(2, 5)])
-	ok(spliced.size() == (GData.BASE_PATHS[0] as Array).size() and spliced[2] == Vector2i(2, 5) and spliced[3] == Vector2i(3, 4), "끝점 순서가 반대여도 이어 붙임")
+	var spliced := e.board.spliced(0, 3, 1, [Vector2i(2, 6)])
+	ok(spliced.size() == (GData.BASE_PATHS[0] as Array).size() and spliced[2] == Vector2i(2, 6) and spliced[3] == Vector2i(3, 5), "끝점 순서가 반대여도 이어 붙임")
 
 
 func _merge() -> void:
@@ -137,14 +137,14 @@ func _merge() -> void:
 	m.players[1]["mat"] = GData.MAT_MAX
 	var a: Array = m.board.paths[0]
 	# 2번 길이 1번 길 (6,9) 로 들어와 합류한 장면
-	var side := [Vector2i(0, 11), Vector2i(1, 11), Vector2i(2, 11), Vector2i(3, 11), Vector2i(4, 11), Vector2i(5, 11), Vector2i(5, 10), Vector2i(5, 9)]
-	var lane1: Array = side + a.slice(a.find(Vector2i(6, 9)))
+	var side := [Vector2i(0, 12), Vector2i(1, 12), Vector2i(2, 12), Vector2i(3, 12), Vector2i(4, 12), Vector2i(5, 12), Vector2i(5, 11), Vector2i(5, 10)]
+	var lane1: Array = side + a.slice(a.find(Vector2i(6, 10)))
 	m.board.paths[1] = lane1
-	ok(m.board.junctions().size() == 1 and m.board.junctions()[0][0] == Vector2i(6, 9), "합류 지점")
-	var path := m.board.merged(1, lane1.find(Vector2i(5, 9)), [Vector2i(5, 8)], 0, a.find(Vector2i(6, 8)))
+	ok(m.board.junctions().size() == 1 and m.board.junctions()[0][0] == Vector2i(6, 10), "합류 지점")
+	var path := m.board.merged(1, lane1.find(Vector2i(5, 10)), [Vector2i(5, 9)], 0, a.find(Vector2i(6, 9)))
 	ok(m.apply(1, {"op": "edit", "e": 1, "path": Board.flat(path)}) == "", "다른 길 위로 그리면 더 일찍 합류")
-	ok(m.board.paths[1].slice(-5) == m.board.paths[0].slice(-5) and m.board.junctions()[0][0] == Vector2i(6, 8), "합류 뒤로는 같은 길")
-	ok(m.board.validate(1, [Vector2i(0, 11), Vector2i(6, 8), Vector2i(6, 7)], {}, 0, 99) != "", "겹친 뒤 갈라지면 불가")
+	ok(m.board.paths[1].slice(-5) == m.board.paths[0].slice(-5) and m.board.junctions()[0][0] == Vector2i(6, 9), "합류 뒤로는 같은 길")
+	ok(m.board.validate(1, [Vector2i(0, 12), Vector2i(6, 9), Vector2i(6, 8)], {}, 0, 99) != "", "겹친 뒤 갈라지면 불가")
 	m.phase = "combat"
 	m.enemies = []
 	var en := m._spawn("grunt", 1)
@@ -153,15 +153,15 @@ func _merge() -> void:
 	ok(m.gate_dmg[1] == 1, "합류한 길로도 적이 본부에 닿음")
 	m.phase = "prep"
 	var lane0_old: Array = m.board.paths[0]
-	ok(m.apply(1, {"op": "edit", "e": 1, "path": Board.flat(lane1)}) == "" and m.board.junctions()[0][0] == Vector2i(6, 9) and m.board.paths[0] == lane0_old, "다시 그려 늦게 합류해도 다른 길은 그대로")
-	ok(m.apply(1, {"op": "undo"}) == "" and m.board.junctions()[0][0] == Vector2i(6, 8), "합류 바꾼 것도 되돌리기")
+	ok(m.apply(1, {"op": "edit", "e": 1, "path": Board.flat(lane1)}) == "" and m.board.junctions()[0][0] == Vector2i(6, 10) and m.board.paths[0] == lane0_old, "다시 그려 늦게 합류해도 다른 길은 그대로")
+	ok(m.apply(1, {"op": "undo"}) == "" and m.board.junctions()[0][0] == Vector2i(6, 9), "합류 바꾼 것도 되돌리기")
 	# 합류한 뒤 공유 구간을 바꾸면 합류한 길도 따라간다
 	var l0: Array = m.board.paths[0]
-	var np: Array = l0.slice(0, l0.find(Vector2i(32, 4)) + 1)
-	np.append_array([Vector2i(32, 5), Vector2i(32, 6), Vector2i(32, 7), Vector2i(32, 8)])
-	ok(m.apply(0, {"op": "edit", "e": 0, "path": Board.flat(np)}) == "", "합류한 공유 구간 다시 그리기")
+	var np: Array = l0.slice(0, l0.find(Vector2i(31, 8)) + 1)      # 본부 왼쪽 위 칸에서 바로 끝
+	ok(m.apply(0, {"op": "edit", "e": 0, "path": Board.flat(np)}).contains("공동 구간 변경 제안") and m.drafts[0]["need"] == [1], "공동 구간을 바꾸면 길 주인에게 제안")
+	ok(m.apply(1, {"op": "edit", "e": 0, "path": Board.flat(np)}) == "", "길 주인이 수락하면 공동 구간 다시 그리기")
 	ok(m.board.paths[1].slice(-3) == np.slice(-3) and m.board.junctions().size() == 1, "합류한 길도 함께 바뀜")
-	ok(m.apply(0, {"op": "undo"}) == "" and m.board.paths[1].slice(-2) == [Vector2i(33, 7), Vector2i(33, 8)], "되돌리면 둘 다 제자리")
+	ok(m.apply(1, {"op": "undo"}) == "" and m.board.paths[1].slice(-2) == [Vector2i(31, 8), Vector2i(31, 9)], "되돌리면 둘 다 제자리")
 	var copy := GMatch.new()
 	copy.load_data(JSON.parse_string(JSON.stringify(m.to_data())))
 	ok(copy.board.junctions().size() == 1, "합류 상태 동기화")
@@ -183,9 +183,9 @@ static func _walk(pts: Array) -> Array:
 ## 교차로·공동 구간·합류 제안
 func _cross() -> void:
 	var m := GMatch.new(["A", "B"])
-	var two := _walk([Vector2i(0, 21), Vector2i(17, 21), Vector2i(17, 2), Vector2i(29, 2), Vector2i(29, 9), Vector2i(30, 9)])
+	var two := _walk([Vector2i(0, 16), Vector2i(17, 16), Vector2i(17, 2), Vector2i(22, 2), Vector2i(22, 12), Vector2i(31, 12)])
 	ok(m.board.validate(1, two, {}, 0, m.cap()) == "", "1번 길을 곧게 가로지르면 교차로")
-	var four := _walk([Vector2i(0, 21), Vector2i(17, 21), Vector2i(17, 2), Vector2i(22, 2), Vector2i(22, 6), Vector2i(26, 6), Vector2i(26, 2), Vector2i(29, 2), Vector2i(29, 9), Vector2i(30, 9)])
+	var four := _walk([Vector2i(0, 16), Vector2i(17, 16), Vector2i(17, 2), Vector2i(22, 2), Vector2i(22, 9), Vector2i(24, 9), Vector2i(24, 2), Vector2i(28, 2), Vector2i(28, 12), Vector2i(31, 12)])
 	ok(m.board.validate(1, four, {}, 0, 99).contains("교차로"), "교차로는 길마다 2곳까지")
 	m.players[1]["mat"] = GData.MAT_MAX
 	var cost := two.size() - (m.board.paths[1] as Array).size()
@@ -208,18 +208,23 @@ func _cross() -> void:
 	p.players[0]["mat"] = GData.MAT_MAX
 	p.players[1]["mat"] = GData.MAT_MAX
 	var a: Array = p.board.paths[0]
-	var join := _walk([Vector2i(0, 21), Vector2i(0, 11), Vector2i(5, 11), Vector2i(5, 9)]) + a.slice(a.find(Vector2i(6, 9)))
+	var join := _walk([Vector2i(0, 16), Vector2i(0, 12), Vector2i(5, 12), Vector2i(5, 10)]) + a.slice(a.find(Vector2i(6, 10)))
 	var price := join.size() - (p.board.paths[1] as Array).size()
 	ok(p.new_merge(1, join) == 0, "새 합류 대상은 1번 길")
 	var msg := p.apply(1, {"op": "edit", "e": 1, "path": Board.flat(join)})
 	ok(msg.contains("합류 제안") and p.board.junctions().is_empty() and int(p.drafts[1]["merge"]) == 0, "팀원 길 합류는 제안으로")
 	ok(p.apply(0, {"op": "edit", "e": 1, "path": Board.flat(join)}) == "" and p.board.junctions().size() == 1, "길 주인이 수락하면 확정")
 	ok(int(p.players[1]["mat"]) == GData.MAT_MAX - price / 2 and int(p.players[0]["mat"]) == GData.MAT_MAX - (price - price / 2), "자재는 반씩")
-	ok(p.near_shared({"x": 8, "y": 7}) and not p.near_shared({"x": 2, "y": 16}), "공동 구간 2칸 안 포탑")
+	ok(p.near_shared({"x": 8, "y": 8}) and not p.near_shared({"x": 20, "y": 20}), "공동 구간 2칸 안 포탑")
 	var c := GMatch.new(["A", "B"])
 	c.players[1]["role"] = "chief"
 	c.players[1]["mat"] = GData.MAT_MAX
 	ok(c.apply(1, {"op": "edit", "e": 1, "path": Board.flat(join)}) == "" and c.board.junctions().size() == 1, "반장은 바로 합류 확정")
+	# 새 입구가 열리면 공동 구간에 합류하는 길이 제안으로 나온다
+	p.wave = GData.THEME_LEN
+	p.phase = "prep"
+	p._advance()
+	ok(not p.offer.is_empty() and int(p.offer["e"]) == 2 and int(p.offer["merge"]) >= 0, "새 입구 길은 공동 구간 합류 제안")
 	var b := GMatch.new(["A", "B"])
 	b.players[0]["bot"] = true
 	b.players[1]["mat"] = GData.MAT_MAX
@@ -228,19 +233,19 @@ func _cross() -> void:
 
 func _economy() -> void:
 	var m := GMatch.new(["A", "B"])
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4}) != "", "길 위 건설 불가")
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3}) == "", "건설")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 5}) != "", "길 위 건설 불가")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4}) == "", "건설")
 	var gun_cost: int = GData.TOWERS["gun"]["cost"]
 	ok(m.players[0]["gold"] == GData.START_GOLD - gun_cost, "골드 차감")
-	var failed := m.apply(1, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	var failed := m.apply(1, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	ok(failed != "" and m.players[1]["gold"] == GData.START_GOLD, "같은 칸 두 번째 요청은 실패하고 골드 유지")
 	var id: int = m.towers.keys()[0]
 	ok(m.apply(1, {"op": "sell", "id": id}) != "", "남의 포탑 판매 불가")
-	ok(m.apply(1, {"op": "move", "id": id, "x": 7, "y": 3}) != "", "남의 포탑 이동 불가")
-	ok(m.apply(0, {"op": "move", "id": id, "x": 7, "y": 3}) == "", "내 포탑 이동")
+	ok(m.apply(1, {"op": "move", "id": id, "x": 7, "y": 4}) != "", "남의 포탑 이동 불가")
+	ok(m.apply(0, {"op": "move", "id": id, "x": 7, "y": 4}) == "", "내 포탑 이동")
 	ok(m.players[0]["gold"] == GData.START_GOLD - gun_cost, "이동은 무료")
 	ok(m.apply(0, {"op": "sell", "id": id}) == "" and m.players[0]["gold"] == GData.START_GOLD, "같은 준비 단계에 지은 포탑은 전액 환불")
-	m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	id = m.towers.keys()[0]
 	ok(m.apply(0, {"op": "upgrade", "id": id}) == "", "2단계 강화")
 	ok(m.apply(0, {"op": "upgrade", "id": id}) != "", "3단계는 방향 필수")
@@ -250,19 +255,19 @@ func _economy() -> void:
 	var spent: int = m.towers[id]["spent"]
 	var g: int = m.players[0]["gold"]
 	ok(m.apply(0, {"op": "sell", "id": id}) == "" and m.players[0]["gold"] == g + int(floor(spent * 0.8)), "지난 웨이브 포탑은 80% 환급")
-	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3}) != "", "공구함에 없는 포탑은 못 지음")
+	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 4}) != "", "공구함에 없는 포탑은 못 지음")
 	m.players[0]["hand"] = ["shock", "sniper", "oil", "flame", "spike", "cold"]
 	ok(m.apply(0, {"op": "pick", "v": ["spike", "cold", "shock", "sniper"]}) == "" and bool(m.players[0]["picked"]), "카드 4장 골라 공구함")
-	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3}) == "", "고른 카드 포탑 건설")
+	ok(m.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 4}) == "", "고른 카드 포탑 건설")
 	ok(m.apply(0, {"op": "pick", "v": ["spike", "spike", "cold", "oil"]}) != "", "같은 카드 두 번 불가")
 	ok(m.apply(0, {"op": "pick", "v": ["magnet", "cold", "oil", "spike"]}) != "", "손에 없는 카드 불가")
 	ok(m.apply(0, {"op": "pick", "v": ["cold", "oil", "spike"]}) != "", "4장이 아니면 불가")
-	ok(m.apply(0, {"op": "build", "type": "spike", "x": 5, "y": 2}) != "", "함정은 길 밖에 못 놓음")
-	ok(m.apply(0, {"op": "build", "type": "spike", "x": 5, "y": 4}) == "", "함정은 길 칸에")
+	ok(m.apply(0, {"op": "build", "type": "spike", "x": 5, "y": 3}) != "", "함정은 길 밖에 못 놓음")
+	ok(m.apply(0, {"op": "build", "type": "spike", "x": 5, "y": 5}) == "", "함정은 길 칸에")
 	ok(m.check_route(0, 0, _detour(m)).has("err") == false, "함정이 있어도 길은 다시 그릴 수 있음")
 	var r := GMatch.new(["A", "B"])
 	r.apply(0, {"op": "ready", "v": true})
-	r.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	r.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	ok(r.players[0]["ready"] == false, "건설을 바꾸면 준비 해제")
 
 
@@ -275,9 +280,9 @@ func _flow() -> void:
 	ok(m.phase == "prep", "한 명만 준비하면 시작 안 함")
 	m.apply(1, {"op": "ready"})
 	ok(m.phase == "combat", "전원 준비 시 전투")
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3}) != "", "전투 중 건설 불가")
-	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 1.5}) == "", "긴급 냉각 사용")
-	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 1.5}) != "", "웨이브당 1회")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4}) != "", "전투 중 건설 불가")
+	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 2.5}) == "", "긴급 냉각 사용")
+	ok(m.apply(0, {"op": "ability", "x": 3.0, "y": 2.5}) != "", "웨이브당 1회")
 	var en := _enemy(999, 1.0)
 	for _i in 4:
 		m._chill(en, 0.55, 1.0, 0)
@@ -309,7 +314,7 @@ func _flow() -> void:
 
 func _towers() -> void:
 	var cold := GMatch.new(["A", "B"])
-	cold.apply(0, {"op": "build", "type": "cold", "x": 5, "y": 3})
+	cold.apply(0, {"op": "build", "type": "cold", "x": 5, "y": 4})
 	cold.enemies = [_enemy(1, 4.0), _enemy(2, 5.0), _enemy(3, 6.0)]
 	cold.phase = "combat"
 	cold._fire(0.05)
@@ -323,7 +328,7 @@ func _towers() -> void:
 	ok(is_equal_approx(100.0 - float(hv["hp"]), 16.0), "철갑탄은 방어 무시")
 	# 전기탑: 연쇄, 감속된 적은 2배
 	var sh := GMatch.new(["A", "B"], [["shock", "cold", "gun", "oil", "flame"]])
-	sh.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3})
+	sh.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 4})
 	sh.enemies = [_enemy(1, 4.0), _enemy(2, 5.0), _enemy(3, 6.0)]
 	sh.enemies[2]["slow"] = 0.3
 	sh.phase = "combat"
@@ -354,18 +359,18 @@ func _towers() -> void:
 	ok((c["st"] as Dictionary).has("oil"), "기름분사탑은 기름 상태를 묻힘")
 	# 신호탑: 주변 사거리 +15%, 유령 실체화
 	var sg := GMatch.new(["A", "B"], [["gun", "signal", "cold", "oil", "flame"]])
-	sg.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	sg.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	var gun_id: int = sg.towers.keys()[0]
 	var base := sg.tower_range(sg.towers[gun_id])
-	sg.apply(0, {"op": "build", "type": "signal", "x": 6, "y": 3})
+	sg.apply(0, {"op": "build", "type": "signal", "x": 6, "y": 4})
 	ok(is_equal_approx(sg.tower_range(sg.towers[gun_id]), base * 1.15), "신호탑 옆 포탑 사거리 +15%")
 	# 저격탑 기본 우선순위는 강한 적
 	var sn := GMatch.new(["A", "B"], [["sniper", "signal", "cold", "oil", "flame"]])
-	sn.apply(0, {"op": "build", "type": "sniper", "x": 5, "y": 3})
+	sn.apply(0, {"op": "build", "type": "sniper", "x": 5, "y": 4})
 	ok(str(sn.towers.values()[0]["prio"]) == "strong" and float(sn.tower_range(sn.towers.values()[0])) >= 6.0, "저격탑: 먼 사거리, 강한 적 우선")
 	# 가시 덫개: 지나가는 적마다 피해, 내구 감소, 수리
 	var sp := GMatch.new(["A", "B"])
-	sp.apply(0, {"op": "build", "type": "spike", "x": 1, "y": 4})
+	sp.apply(0, {"op": "build", "type": "spike", "x": 1, "y": 5})
 	var trap: Dictionary = sp.towers.values()[0]
 	sp.phase = "combat"
 	var walker := _enemy(1, 1.0)
@@ -376,7 +381,7 @@ func _towers() -> void:
 	sp.phase = "prep"
 	ok(sp.apply(0, {"op": "repair", "id": trap["id"]}) == "" and int(trap["uses"]) == 30 and int(sp.players[0]["mat"]) == GData.MAT_START - 1, "수리는 자재 1")
 	var one := GMatch.new(["A", "B"])
-	one.apply(0, {"op": "ability", "x": 1.0, "y": 1.0})
+	one.apply(0, {"op": "ability", "x": 1.0, "y": 2.0})
 	ok(GData.ABILITY_RADIUS == 1.5 and GData.ABILITY_SLOW == 0.4, "긴급 냉각 시안 수치")
 
 
@@ -408,7 +413,7 @@ func _enemies() -> void:
 	ok(hidden_at >= 0.0, "유령병은 주기적으로 조준 불가")
 	m.phase = "prep"
 	m.players[0]["kit"] = ["gun", "signal", "cold", "oil"]
-	m.apply(0, {"op": "build", "type": "signal", "x": 5, "y": 3})
+	m.apply(0, {"op": "build", "type": "signal", "x": 5, "y": 4})
 	m.time = hidden_at
 	ok(not m.is_hidden(ph), "신호탑 근처의 유령병은 실체화")
 	var shield := _enemy(5, 2.0)
@@ -439,7 +444,7 @@ func _enemies() -> void:
 	var giant := _enemy(10, 5.0)
 	giant["type"] = "giant"
 	var gm := GMatch.new(["A", "B"])
-	gm.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	gm.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	gm.phase = "combat"
 	gm.enemies = [giant]
 	gm._enemy_skills(8.1)
@@ -450,13 +455,13 @@ func _themes() -> void:
 	ok(GData.theme_of(5) == 0 and GData.theme_of(6) == 1 and GData.theme_of(21) == 4 and GData.theme_of(25) == 4, "5웨이브마다 테마 전환")
 	ok(GData.max_path(1) == 70 and GData.max_path(21) == 102, "길이 상한 70 → 테마마다 +8")
 	var m := GMatch.new(["A", "B"])
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 13}) != "", "랜드마크 구역 건설 불가")
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 1, "y": 10}) != "", "바위 자리에 건설 불가")
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 2}) != "", "강에 건설 불가")
-	ok(m.board.ground_err(Vector2i(3, 4), 0, true) == "" and m.board.ground_err(Vector2i(3, 4), 0, false) != "", "다리는 길만")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 14}) != "", "랜드마크 구역 건설 불가")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 1, "y": 11}) != "", "바위 자리에 건설 불가")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 3, "y": 3}) != "", "강에 건설 불가")
+	ok(m.board.ground_err(Vector2i(3, 5), 0, true) == "" and m.board.ground_err(Vector2i(3, 5), 0, false) != "", "다리는 길만")
 	m.players[0]["gold"] = 999
-	m.apply(0, {"op": "build", "type": "gun", "x": 14, "y": 6})
-	m.apply(0, {"op": "build", "type": "gun", "x": 10, "y": 6})
+	m.apply(0, {"op": "build", "type": "gun", "x": 14, "y": 7})
+	m.apply(0, {"op": "build", "type": "gun", "x": 10, "y": 7})
 	var hi: Dictionary = m.towers.values()[0]
 	var lo: Dictionary = m.towers.values()[1]
 	ok(is_equal_approx(m.tower_range(hi), m.tower_range(lo) + GData.HIGH_RANGE), "높은 땅은 사거리 +1칸")
@@ -479,7 +484,7 @@ func _themes() -> void:
 	m._move_enemies(0.5)
 	ok(float(hot["hp"]) < 100.0, "화산 균열 길은 적에게 지속 피해")
 	m.phase = "prep"
-	ok(m.board.can_build(Vector2i(7, 5), m.tower_cells(), 3) != "" and m.board.can_build(Vector2i(7, 5), m.tower_cells(), 0) == "", "균열 옆 칸은 화산부터 건설 금지")
+	ok(m.board.can_build(Vector2i(7, 6), m.tower_cells(), 3) != "" and m.board.can_build(Vector2i(7, 6), m.tower_cells(), 0) == "", "균열 옆 칸은 화산부터 건설 금지")
 	var sand := GMatch.new(["A", "B"])
 	sand.wave = 11
 	var old_road: Rect2i = GData.OLD_ROADS[0]
@@ -528,7 +533,7 @@ func _rewards() -> void:
 	m.hp = 80
 	m._finish_wave()
 	ok(m.phase == "reward", "보스 뒤에는 보상 투표")
-	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3}) != "", "보상 투표 중에는 건설 불가")
+	ok(m.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4}) != "", "보상 투표 중에는 건설 불가")
 	m.apply(0, {"op": "vote", "v": "heal"})
 	ok(m.phase == "reward", "한 명만 투표하면 그대로")
 	m.apply(1, {"op": "vote", "v": "gold"})
@@ -537,7 +542,7 @@ func _rewards() -> void:
 	g.phase = "reward"
 	g.apply(0, {"op": "vote", "v": "up"})
 	g.apply(1, {"op": "vote", "v": "up"})
-	g.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	g.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	var id: int = g.towers.keys()[0]
 	var gold: int = g.players[0]["gold"]
 	ok(g.apply(0, {"op": "upgrade", "id": id}) == "" and int(g.players[0]["gold"]) == gold and int(g.players[0]["free_up"]) == 0, "무료 강화 1회")
@@ -609,11 +614,11 @@ func _joints() -> void:
 	m.players[0]["gold"] = 2000
 	m.players[1]["gold"] = 2000
 	var g0: int = m.players[0]["gold"]
-	ok(m.apply(0, {"op": "build", "type": "railgun", "x": 9, "y": 6}) == "" and int(m.players[0]["gold"]) == g0 - 160, "합동 설비 기초: 합계의 40%")
+	ok(m.apply(0, {"op": "build", "type": "railgun", "x": 9, "y": 7}) == "" and int(m.players[0]["gold"]) == g0 - 160, "합동 설비 기초: 합계의 40%")
 	var id: int = m.towers.keys()[0]
 	var t: Dictionary = m.towers[id]
-	ok(m.tower_cells().has(Vector2i(10, 7)) and m.tower_cells().size() == 4, "2x2 칸 차지")
-	ok(m.apply(1, {"op": "build", "type": "relay", "x": 13, "y": 6}) != "", "테마당 한 팀 1개")
+	ok(m.tower_cells().has(Vector2i(10, 8)) and m.tower_cells().size() == 4, "2x2 칸 차지")
+	ok(m.apply(1, {"op": "build", "type": "relay", "x": 13, "y": 7}) != "", "테마당 한 팀 1개")
 	m.apply(0, {"op": "chip", "id": id})
 	m.apply(0, {"op": "chip", "id": id})
 	ok(m.apply(0, {"op": "chip", "id": id}) != "" and not bool(t["done"]), "혼자서는 완성할 수 없음")
@@ -637,10 +642,10 @@ func _joints() -> void:
 	var r := GMatch.new(["A", "B"], [["relay", "gun", "cold", "spike"], ["gun", "cold", "cannon", "spike"]])
 	r.players[0]["gold"] = 2000
 	r.players[1]["gold"] = 2000
-	r.apply(1, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	r.apply(1, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	var gid: int = r.towers.keys()[0]
 	var before := r.tower_range(r.towers[gid])
-	r.apply(0, {"op": "build", "type": "relay", "x": 9, "y": 6})
+	r.apply(0, {"op": "build", "type": "relay", "x": 9, "y": 7})
 	var rid: int = r.towers.keys()[1]
 	r.apply(0, {"op": "chip", "id": rid})
 	r.apply(1, {"op": "chip", "id": rid})
@@ -679,7 +684,7 @@ func _roles() -> void:
 	# 정비: 투자 20% 할인
 	var mc := GMatch.new(["A", "B"])
 	mc.players[1]["role"] = "mech"
-	mc.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	mc.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	var gid: int = mc.towers.keys()[0]
 	var mg: int = mc.players[1]["gold"]
 	mc.apply(1, {"op": "invest", "id": gid})
@@ -725,7 +730,7 @@ func _roles() -> void:
 
 func _invest() -> void:
 	var m := GMatch.new(["A", "B"])
-	m.apply(0, {"op": "build", "type": "cold", "x": 5, "y": 3})
+	m.apply(0, {"op": "build", "type": "cold", "x": 5, "y": 4})
 	var id: int = m.towers.keys()[0]
 	var t: Dictionary = m.towers[id]
 	ok(m.apply(0, {"op": "invest", "id": id}) != "", "내 포탑에는 투자 못 함")
@@ -767,7 +772,7 @@ func _invest() -> void:
 	ok(int(m.players[1]["gold"]) - g1 == int(floor(value * float(shares[1]))) and int(m.players[0]["gold"]) - g0 + int(m.players[1]["gold"]) - g1 == value, "판매하면 낸 비율대로 돌려줌")
 	# 주인이 끊기면 5초 뒤 자동 강화
 	var a := GMatch.new(["A", "B"])
-	a.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 3})
+	a.apply(0, {"op": "build", "type": "gun", "x": 5, "y": 4})
 	var aid: int = a.towers.keys()[0]
 	for _i in 4:
 		a.apply(1, {"op": "invest", "id": aid})
@@ -784,7 +789,7 @@ func _new_towers() -> void:
 	ok(GData.fresh_unlocks(6) == ["steam", "cryo", "searchlight"] and GData.fresh_unlocks(7).is_empty(), "새로 열린 포탑은 테마 첫 웨이브에")
 	# 증기탑: 혼자서 냉기·화상 번갈아 → 열충격
 	var st := GMatch.new(["A", "B"], [["steam", "gun", "cold", "spike"]])
-	st.apply(0, {"op": "build", "type": "steam", "x": 5, "y": 3})
+	st.apply(0, {"op": "build", "type": "steam", "x": 5, "y": 4})
 	st.phase = "combat"
 	var a := _enemy(1, 5.0)
 	a["hp"] = 1000.0
@@ -801,23 +806,23 @@ func _new_towers() -> void:
 	ok(float(b["stun"]) >= 1.0, "크레인 들었다 놓기: 기절")
 	# 발전기: 주변 전기 피해 +
 	var gn := GMatch.new(["A", "B"], [["shock", "generator", "cold", "spike"]])
-	gn.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 3})
-	gn.apply(0, {"op": "build", "type": "generator", "x": 7, "y": 3})
-	ok(is_equal_approx(float(gn._volt_at(Vector2(5.5, 3.5))[0]), 0.2), "발전기 근처 전기 피해 +20%")
+	gn.apply(0, {"op": "build", "type": "shock", "x": 5, "y": 4})
+	gn.apply(0, {"op": "build", "type": "generator", "x": 7, "y": 4})
+	ok(is_equal_approx(float(gn._volt_at(Vector2(5.5, 4.5))[0]), 0.2), "발전기 근처 전기 피해 +20%")
 	# 비상 배터리: 긴급 냉각 +1
 	var bt := GMatch.new(["A", "B"], [["generator", "gun", "cold", "spike"]])
 	bt.players[0]["gold"] = 2000
-	bt.apply(0, {"op": "build", "type": "generator", "x": 7, "y": 3})
+	bt.apply(0, {"op": "build", "type": "generator", "x": 7, "y": 4})
 	var gid: int = bt.towers.keys()[0]
 	bt.apply(0, {"op": "upgrade", "id": gid})
 	bt.apply(0, {"op": "upgrade", "id": gid, "branch": "b"})
 	bt.apply(0, {"op": "ready", "v": true})
 	bt.apply(1, {"op": "ready", "v": true})
-	ok(bt.apply(0, {"op": "ability", "x": 5.0, "y": 4.0}) == "" and bt.apply(0, {"op": "ability", "x": 6.0, "y": 4.0}) == "" and bt.apply(0, {"op": "ability", "x": 6.0, "y": 4.0}) != "", "비상 배터리: 긴급 냉각 2회")
+	ok(bt.apply(0, {"op": "ability", "x": 5.0, "y": 5.0}) == "" and bt.apply(0, {"op": "ability", "x": 6.0, "y": 5.0}) == "" and bt.apply(0, {"op": "ability", "x": 6.0, "y": 5.0}) != "", "비상 배터리: 긴급 냉각 2회")
 	# 컨베이어 A: 한 칸 뒤로
 	var cv := GMatch.new(["A", "B"], [["conveyor", "gun", "cold", "spike"]])
 	cv.players[0]["gold"] = 2000
-	cv.apply(0, {"op": "build", "type": "conveyor", "x": 3, "y": 4})
+	cv.apply(0, {"op": "build", "type": "conveyor", "x": 3, "y": 5})
 	var cid: int = cv.towers.keys()[0]
 	cv.apply(0, {"op": "upgrade", "id": cid})
 	cv.apply(0, {"op": "upgrade", "id": cid, "branch": "a"})
@@ -845,7 +850,7 @@ func _new_towers() -> void:
 	ok(int(cy.rx_log.get("shatter", 0)) == 1, "집속탄: 냉기 적에게 산산조각")
 	# 탐조등: 표식, 유령 드러냄
 	var sl := GMatch.new(["A", "B"], [["searchlight", "gun", "cold", "spike"]])
-	sl.apply(0, {"op": "build", "type": "searchlight", "x": 5, "y": 3})
+	sl.apply(0, {"op": "build", "type": "searchlight", "x": 5, "y": 4})
 	sl.phase = "combat"
 	var e := _enemy(1, 5.0)
 	sl.enemies = [e]
@@ -858,7 +863,7 @@ func _new_towers() -> void:
 	sc.enemies = [f]
 	var ss := GData.tower_stats("scrap", 3, "a")
 	ss["range"] = 5.0
-	sc.towers[99] = {"id": 99, "owner": 0, "type": "scrap", "x": 5, "y": 3, "lv": 3, "branch": "a", "spent": 0, "prio": "first", "cd": 0.0, "uses": 0, "heat": 0.0, "fresh": false}
+	sc.towers[99] = {"id": 99, "owner": 0, "type": "scrap", "x": 5, "y": 4, "lv": 3, "branch": "a", "spent": 0, "prio": "first", "cd": 0.0, "uses": 0, "heat": 0.0, "fresh": false}
 	sc._fire(0.05)
 	var has_mag := false
 	for k in sc.puddle_t:
@@ -945,7 +950,7 @@ func _reactions() -> void:
 	ok(is_equal_approx(1000.0 - float(ice["hp"]), 52.0 * 1.5) and int(sm.rx_log.get("shatter", 0)) == 1, "산산조각: 냉기 + 한 방 40 이상 = ×1.5")
 	# 미끄럼
 	var sl := GMatch.new(["A", "B"])
-	sl.apply(0, {"op": "build", "type": "spike", "x": 1, "y": 4})
+	sl.apply(0, {"op": "build", "type": "spike", "x": 1, "y": 5})
 	sl.phase = "combat"
 	var w := _enemy(1, 0.6)
 	w["hp"] = 1000.0

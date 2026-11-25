@@ -39,8 +39,11 @@ var _can_call := false       # 손님 쪽 사본: 호스트가 알려준 일찍 
 var is_copy := false
 var _wave_t := 0.0
 var _next_id := 1
+var offer: Dictionary = {}    # 새 입구 길을 공동 구간에 합류시키는 제안 {e, path, cost, merge}
+var shared_kills := 0         # 공동 구간에서 막은 적 (결과 화면)
 var _lane_sig := 0           # 길 모양이 바뀌면 공동 구간·교차로 캐시를 다시 만든다
 var _near_shared: Dictionary = {}
+var _shared: Dictionary = {}
 var _cross_cells: Dictionary = {}
 var _undo: Dictionary = {}   # 자리 -> 같은 준비 단계의 길 수정 기록 (호스트만)
 
@@ -479,6 +482,7 @@ func _build(seat: int, c: Dictionary) -> String:
 	towers[id] = {"id": id, "owner": seat, "type": type, "x": cell.x, "y": cell.y, "lv": 1, "branch": "",
 		"spent": cost, "prio": "strong" if type == "sniper" else "first", "cd": 0.0, "uses": int(s["uses"]), "heat": 0.0, "fresh": true,
 		"inv": {}, "contrib": {}, "noinv": false, "auto_t": 0.0}
+	fx.append({"k": "build", "id": id, "by": seat, "x": cell.x, "y": cell.y})
 	return ""
 
 
@@ -526,6 +530,7 @@ func _sell(seat: int, c: Dictionary) -> String:
 	var t := _mine(seat, c)
 	if t.is_empty():
 		return "내 포탑만 팔 수 있어요"
+	fx.append({"k": "sell", "id": int(t["id"]), "by": seat, "x": int(t["x"]), "y": int(t["y"]), "type": str(t["type"]), "lv": int(t["lv"]), "branch": str(t["branch"])})
 	var value := sell_value(t)
 	var shares := tower_shares(t)
 	var given := 0
@@ -736,6 +741,7 @@ func _upgrade(seat: int, c: Dictionary) -> String:
 	t["lv"] = lv + 1
 	if lv == 2:
 		t["branch"] = branch
+	fx.append({"k": "up", "id": int(t["id"]), "by": seat, "mk3": lv == 2})
 	if is_trap(t):
 		t["uses"] = int(GData.tower_stats(t["type"], int(t["lv"]), str(t["branch"]))["uses"])
 	return ""
@@ -863,22 +869,46 @@ func _edit(seat: int, c: Dictionary) -> String:
 			drafts[drafter] = held
 		return str(r["err"])
 	var f := new_merge(e, path)
-	if f >= 0 and drafter < 0:      # 팀원 길에 합류: 길 주인이 수락해야 확정 (반장은 바로)
-		var owner := lane_owner(f)
-		if owner >= 0 and owner != seat and chief_seat() != seat and bool(players[owner]["online"]) and not bool(players[owner].get("bot", false)):
-			drafts[seat] = {"e": e, "path": Board.flat(r["path"]), "cost": int(r["cost"]), "moves": r["moves"], "merge": f}
-			return "합류 제안을 보냈어요 · %s 님이 수락하면 확정돼요" % players[owner]["name"]
+	var shared: bool = f >= 0 or not (r["sync"] as Dictionary).is_empty()
+	if drafter < 0:      # 공동 구간을 만들거나 바꾸면 길 주인 모두가 수락해야 확정 (반장은 바로)
+		var need := _approvers(seat, e, f, r["sync"])
+		if not need.is_empty():
+			drafts[seat] = {"e": e, "path": Board.flat(r["path"]), "cost": int(r["cost"]), "moves": r["moves"], "merge": f, "need": need, "ok": []}
+			var names := ", ".join(need.map(func(k): return str(players[int(k)]["name"])))
+			return ("합류 제안을 보냈어요 · %s 님이 수락하면 확정돼요" if f >= 0 else "공동 구간 변경 제안을 보냈어요 · %s 님이 수락하면 확정돼요") % names
+	elif held.has("need"):
+		var need: Array = held["need"]
+		if not need.has(seat):
+			drafts[drafter] = held
+			return "길 주인이 수락해야 해요"
+		var ok: Array = (held.get("ok", []) as Array).duplicate()
+		if not ok.has(seat):
+			ok.append(seat)
+		var left := need.filter(func(k): return not ok.has(k))
+		if not left.is_empty():
+			held["ok"] = ok
+			drafts[drafter] = held
+			return "수락했어요 · %s 님을 기다려요" % ", ".join(left.map(func(k): return str(players[int(k)]["name"])))
 	var cost := int(r["cost"])
-	var share := 0      # 합류 제안을 수락하면 자재는 반씩
-	if f >= 0 and drafter >= 0 and cost > 0:
-		share = mini(cost / 2, int(players[drafter]["mat"]))
+	var share := 0      # 공동 구간 공사 자재는 두 사람이 반씩
+	var partner := drafter
+	if shared and partner < 0:
+		for k in _owners(e, f, r["sync"]):
+			if k != seat:
+				partner = k
+				break
+	if shared and partner >= 0 and partner != seat and cost > 0:
+		share = mini(cost / 2, int(players[partner]["mat"]))
 	if cost - share > int(players[seat]["mat"]):
 		if drafter >= 0:
 			drafts[drafter] = held
 		return "공사 자재가 부족해요 (%d 필요)" % (cost - share)
 	if share > 0:
-		players[drafter]["mat"] = int(players[drafter]["mat"]) - share
+		players[partner]["mat"] = int(players[partner]["mat"]) - share
 		cost -= share
+	if offer.has("e") and int(offer["e"]) == e:
+		offer = {}
+	fx.append({"k": "road", "by": seat, "merge": f >= 0, "cross": board.crossings().size()})
 	var back := []
 	for mv in r["moves"]:
 		var t: Dictionary = towers[int(mv[0])]
@@ -899,6 +929,85 @@ func _edit(seat: int, c: Dictionary) -> String:
 	for p in players:
 		p["ready"] = false
 	return ""
+
+
+## 길 e 를 바꿀 때 영향을 받는 길 주인들 (합류 대상 f, 함께 바뀌는 길들)
+func _owners(e: int, f: int, sync: Dictionary) -> Array:
+	var out := []
+	var lanes := [e]
+	if f >= 0:
+		lanes.append(f)
+	for o in sync:
+		lanes.append(int(o))
+	for l in lanes:
+		var k := lane_owner(int(l))
+		if k >= 0 and not out.has(k):
+			out.append(k)
+	return out
+
+
+## 수락이 필요한 사람들: 영향받는 길 주인 중 나 아닌, 접속 중인 사람 (봇 제외). 반장이 고치면 없음
+func _approvers(seat: int, e: int, f: int, sync: Dictionary) -> Array:
+	if chief_seat() == seat or (f < 0 and sync.is_empty()):
+		return []
+	var out := []
+	for k in _owners(e, f, sync):
+		if k != seat and bool(players[k]["online"]) and not bool(players[k].get("bot", false)):
+			out.append(k)
+	return out
+
+
+## 새 입구가 열리면 가장 가까운 공동 구간에 바로 합류하는 길을 제안으로 낸다
+func _offer_merge(e: int) -> void:
+	offer = {}
+	var target := board.shared_cells()
+	if target.is_empty():
+		return
+	var start: Vector2i = board.paths[e][0]
+	var used := {}
+	for o in board.paths.size():
+		if o != e:
+			for c in board.paths[o]:
+				used[c] = true
+	var blk := blockers()
+	var prev := {start: start}
+	var q := [start]
+	var hit := Vector2i(-1, -1)
+	while not q.is_empty():
+		var c: Vector2i = q.pop_front()
+		if target.has(c):
+			hit = c
+			break
+		for d in [Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT]:
+			var n: Vector2i = c + d
+			if prev.has(n) or not Board.in_bounds(n) or blk.has(n):
+				continue
+			if used.has(n) and not target.has(n):
+				continue
+			if board.ground_err(n, theme(), true) != "":
+				continue
+			prev[n] = c
+			q.append(n)
+	if hit.x < 0:
+		return
+	var head: Array = []
+	var c2 := hit
+	while c2 != start:
+		head.push_front(c2)
+		c2 = prev[c2]
+	head.push_front(start)
+	var owner_lane := -1
+	for o in board.paths.size():
+		if o != e and (board.paths[o] as Array).has(hit):
+			owner_lane = o
+			break
+	var tail: Array = board.paths[owner_lane]
+	var path: Array = head.slice(0, head.size() - 1) + tail.slice(tail.find(hit))
+	var lanes: Array = board.paths.duplicate()
+	lanes[e] = path
+	if board.validate(e, path, blk, theme(), cap(), lanes) != "":
+		return
+	offer = {"e": e, "path": Board.flat(path), "cost": board.cost_of(e, path, theme()), "merge": owner_lane}
 
 
 ## 기본 입구 길의 주인 (그 자리 사람). 테마마다 새로 열린 길은 주인이 없다
@@ -1125,6 +1234,7 @@ func _ability(seat: int, c: Dictionary) -> String:
 func _start_wave() -> void:
 	phase = "combat"
 	drafts = {}
+	offer = {}
 	_undo = {}
 	_wave_t = 0.0
 	_queue = []
@@ -1221,7 +1331,8 @@ func lane_cache() -> void:
 		return
 	_lane_sig = h
 	_near_shared = {}
-	for c in board.shared_cells():
+	_shared = board.shared_cells()
+	for c in _shared:
 		for dy in range(-GData.SHARED_NEAR, GData.SHARED_NEAR + 1):
 			for dx in range(-GData.SHARED_NEAR, GData.SHARED_NEAR + 1):
 				_near_shared[c + Vector2i(dx, dy)] = true
@@ -1827,8 +1938,11 @@ func _react(rx: String, en: Dictionary, o1: int, o2: int) -> void:
 			for e2 in enemies.duplicate():
 				if _pos(e2).distance_to(at) <= 1.0:
 					_true_dmg(e2, 30.0 * mul, owners)
-		"harden":
-			en["stun"] = 0.4 if boss else 1.5
+		"harden":      # 굳음 뒤 2초는 다시 굳지 않는다 (영원히 묶이는 것 방지)
+			if time >= float(en.get("hard_until", 0.0)):
+				var dur := 0.4 if boss else 1.5
+				en["stun"] = maxf(float(en["stun"]), dur)
+				en["hard_until"] = time + dur + 2.0
 		"short":
 			for e2 in enemies.duplicate():
 				if e2 == en or ((e2["st"] as Dictionary).has("oil") and _pos(e2).distance_to(at) <= 2.0):
@@ -1887,7 +2001,10 @@ func _die(en: Dictionary, owner: int) -> void:
 	if owner >= 0:
 		players[owner]["kills"] += 1
 	var at := _pos(en)
-	fx.append({"k": "kill", "x": at.x, "y": at.y, "big": en["type"] == "heavy" or GData.is_boss(en["type"])})
+	fx.append({"k": "kill", "x": at.x, "y": at.y, "big": en["type"] == "heavy" or GData.is_boss(en["type"]), "type": str(en["type"])})
+	lane_cache()
+	if _shared.has(Vector2i(floori(at.x), floori(at.y))):
+		shared_kills += 1
 	enemies.erase(en)
 	if d.has("split"):
 		var sp: Array = d["split"]
@@ -1941,6 +2058,7 @@ func _advance() -> void:
 		board.opened = true
 		gate_dmg.append(0)
 		fx.append({"k": "open", "e": board.paths.size() - 1})
+		_offer_merge(board.paths.size() - 1)
 	_make_plan()
 	_deal()
 
@@ -1985,7 +2103,7 @@ func to_data() -> Dictionary:
 	for s in players.size():
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "gd": gate_dmg,
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "of": offer, "sk": shared_kills, "gd": gate_dmg,
 		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "wl": _walls_data(), "rl": rx_log, "sr": seen_rx, "jd": snappedf(joint_dmg, 1.0), "tl": _tower_log_data()}
 
 
@@ -2041,7 +2159,8 @@ func load_data(d: Dictionary) -> void:
 	var dr: Dictionary = d.get("dr", {})
 	for s in dr:
 		var v: Dictionary = dr[s]
-		drafts[int(s)] = {"e": int(v["e"]), "path": v["path"], "cost": int(v["cost"]), "moves": v.get("moves", []), "merge": int(v.get("merge", -1))}
+		drafts[int(s)] = {"e": int(v["e"]), "path": v["path"], "cost": int(v["cost"]), "moves": v.get("moves", []), "merge": int(v.get("merge", -1)),
+			"need": (v.get("need", []) as Array).map(func(k): return int(k)), "ok": (v.get("ok", []) as Array).map(func(k): return int(k))}
 	plan = d.get("wp", [])
 	seed_ = int(d.get("sd", 0))
 	summary = d.get("sm", {})
@@ -2054,6 +2173,8 @@ func load_data(d: Dictionary) -> void:
 	board.load_data(d["pa"])
 	board.opened = bool(d.get("op", false))
 	board.extra = int(d.get("ex", 0))
+	offer = d.get("of", {}) if d.get("of", {}) is Dictionary else {}
+	shared_kills = int(d.get("sk", 0))
 	gate_dmg = []
 	for v in d["gd"]:
 		gate_dmg.append(int(v))

@@ -70,6 +70,8 @@ static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := f
 		var d: Dictionary = m.drafts[k]
 		if int(k) != seat and int(d.get("merge", -1)) >= 0 and m.lane_owner(int(d["merge"])) == seat:
 			m.apply(seat, {"op": "edit", "e": int(d["e"]), "path": d["path"]})
+	if not m.offer.is_empty() and int(m.players[seat]["mat"]) >= int(m.offer["cost"]):      # 새 입구 합류 제안은 받아 준다
+		m.apply(seat, {"op": "edit", "e": int(m.offer["e"]), "path": m.offer["path"]})
 	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
 	var suggestion := {}
 	if use_roads:

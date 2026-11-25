@@ -41,6 +41,7 @@ var _done: Dictionary = {}    # token -> {요청 id: 결과}
 var _chat_times: Dictionary = {}
 var _ping_times: Dictionary = {}
 var _bot_wave := 0
+var ping_count := 0      # 지금까지 받은 핑 수 (효과음용)
 
 
 func _init(transport = null, name := "플레이어", token := "") -> void:
@@ -463,6 +464,7 @@ func _ping(s: int, c: Dictionary) -> String:
 
 
 func _add_ping(row: Dictionary) -> void:
+	ping_count += 1
 	var p := row.duplicate()
 	p["t"] = _clock
 	pings.append(p)

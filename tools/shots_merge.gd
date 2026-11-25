@@ -60,13 +60,13 @@ func _run() -> void:
 	m.players[0]["mat"] = 12
 	m.players[1]["mat"] = 12
 	var a: Array = m.board.paths[0]
-	var join := _walk([Vector2i(0, 21), Vector2i(0, 11), Vector2i(5, 11), Vector2i(5, 9)]) + a.slice(a.find(Vector2i(6, 9)))
+	var join := _walk([Vector2i(0, 16), Vector2i(0, 12), Vector2i(5, 12), Vector2i(5, 10)]) + a.slice(a.find(Vector2i(6, 10)))
 	print("propose: ", m.apply(1, {"op": "edit", "e": 1, "path": Board.flat(join)}))
 	g._cam = Vector2(8, 8)
 	g._kit_open = false
 	await _save("m_proposal")
 	print("accept: ", m.apply(0, {"op": "edit", "e": 1, "path": Board.flat(join)}))
-	for row in [[0, "gun", 8, 7], [0, "cannon", 14, 8], [1, "flame", 4, 10], [1, "oil", 9, 10], [0, "cold", 18, 5], [1, "shock", 24, 5], [0, "magnet", 28, 3], [1, "sniper", 30, 6]]:
+	for row in [[0, "gun", 8, 8], [0, "cannon", 14, 9], [1, "flame", 4, 11], [1, "oil", 9, 11], [0, "cold", 18, 6], [1, "shock", 24, 6], [0, "magnet", 28, 4], [1, "sniper", 30, 7]]:
 		m.apply(int(row[0]), {"op": "build", "type": row[1], "x": row[2], "y": row[3]})
 	g._zoom = 1
 	m.board.paths[1] = join
@@ -93,17 +93,17 @@ func _run() -> void:
 	g._overview_t = 0.0
 	var n: GMatch = q.m
 	n.players[1]["mat"] = 99
-	var two := _walk([Vector2i(0, 21), Vector2i(17, 21), Vector2i(17, 2), Vector2i(29, 2), Vector2i(29, 9), Vector2i(30, 9)])
+	var two := _walk([Vector2i(0, 16), Vector2i(17, 16), Vector2i(17, 2), Vector2i(22, 2), Vector2i(22, 12), Vector2i(31, 12)])
 	print("cross: ", n.apply(1, {"op": "edit", "e": 1, "path": Board.flat(two)}))
 	n.players[0]["kit"] = ["gun", "cannon", "cold", "magnet"]
 	n.players[0]["gold"] = 3000
-	n.apply(0, {"op": "build", "type": "gun", "x": 18, "y": 5})
-	n.apply(0, {"op": "build", "type": "cannon", "x": 28, "y": 5})
-	g._cam = Vector2(24, 6)
+	n.apply(0, {"op": "build", "type": "gun", "x": 18, "y": 6})
+	n.apply(0, {"op": "build", "type": "cannon", "x": 23, "y": 4})
+	g._cam = Vector2(22, 7)
 	g._kit_open = false
 	await _save("m_cross")
 	n.hp = 40
-	g._cam = Vector2(30, 9)
+	g._cam = Vector2(31, 10)
 	g._kit_open = false
 	await _save("m_hq_mid")
 	n.hp = 12

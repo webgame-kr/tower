@@ -890,7 +890,11 @@ func _picks() -> void:
 	ok(m.apply(0, {"op": "reroll"}) == "" and int(m.players[0]["gold"]) == gold - GData.REROLL_COST, "두 번째부터 30골드")
 	m.wave = 1
 	m._finish_wave()
-	ok(m.wave == 2 and (m.players[0]["kit"] as Array).has(hand[0]) and not (m.players[0]["hand"] as Array).has(hand[0]), "잠근 카드는 다음 웨이브에도 공구함에 (손패에는 없음)")
+	ok(m.wave == 2 and m.apply(0, {"op": "pick", "v": hand.slice(0, 4)}) != "" and m.apply(0, {"op": "reroll"}) != "", "같은 테마 안에서는 다시 고르지 않음")
+	m.wave = GData.THEME_LEN
+	m.phase = "prep"
+	m._advance()
+	ok(m.wave == GData.THEME_LEN + 1 and not bool(m.players[0]["picked"]) and (m.players[0]["kit"] as Array).has(hand[0]) and not (m.players[0]["hand"] as Array).has(hand[0]), "테마가 바뀌면 새 손패 · 잠근 카드는 공구함에")
 	var h2: Array = m.players[0]["hand"]
 	ok(m.apply(0, {"op": "pick", "v": h2.slice(0, 3)}) == "" and (m.players[0]["kit"] as Array)[0] == hand[0], "잠금이 있으면 3장만 고름")
 	var keep: Array = (m.players[1]["kit"] as Array).duplicate()

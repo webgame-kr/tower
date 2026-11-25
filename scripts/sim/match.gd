@@ -83,7 +83,6 @@ func _deal() -> void:
 			p["hand"][-1] = jk
 		p["picked"] = false
 		p["rerolls"] = 0
-		p["r_used"] = false
 		if str(p["lock"]) != "" and not (p["kit"] as Array).has(p["lock"]):
 			p["kit"] = [p["lock"]] + (p["kit"] as Array).slice(0, GData.KIT_SIZE - 1)
 
@@ -137,10 +136,22 @@ func auto_kits() -> void:
 			p["kit"] = hand.slice(0, GData.KIT_SIZE)
 
 
+## 포탑은 테마가 바뀔 때(그 테마 첫 웨이브 준비)만 고른다. 고른 공구함은 그 테마 내내 쓴다
+func pick_time() -> bool:
+	return (wave - 1) % GData.THEME_LEN == 0
+
+
+## 지금 고를 수 있는지: 테마 첫 웨이브 준비이거나, 아직 한 번도 안 골랐을 때
+func can_pick(seat: int) -> bool:
+	return phase == "prep" and (pick_time() or not bool(players[seat]["picked"]))
+
+
 ## 고르기: 잠근 카드 + 손패에서 나머지 (모두 4장)
 func _pick_kit(seat: int, c: Dictionary) -> String:
 	if phase != "prep":
 		return "준비 단계에서만 고를 수 있어요"
+	if not can_pick(seat):
+		return "포탑은 테마가 바뀔 때 다시 골라요"
 	var v = c.get("v", [])
 	if not v is Array:
 		return "카드를 골라 주세요"
@@ -163,7 +174,7 @@ func _pick_kit(seat: int, c: Dictionary) -> String:
 	return ""
 
 
-## 잠금: 지금 공구함의 한 장을 다음 웨이브에도 남긴다 (한 칸)
+## 잠금: 지금 공구함의 한 장을 다음 테마에도 남긴다 (한 칸)
 func _lock(seat: int, c: Dictionary) -> String:
 	var k := str(c.get("v", ""))
 	var p: Dictionary = players[seat]
@@ -173,10 +184,12 @@ func _lock(seat: int, c: Dictionary) -> String:
 	return ""
 
 
-## 다시 뽑기: 웨이브마다 첫 번은 무료, 그다음 30골드
+## 다시 뽑기: 테마마다 첫 번은 무료, 그다음 30골드
 func _reroll(seat: int) -> String:
 	if phase != "prep":
 		return "준비 단계에서만 다시 뽑을 수 있어요"
+	if not can_pick(seat):
+		return "포탑은 테마가 바뀔 때 다시 골라요"
 	var p: Dictionary = players[seat]
 	var cost := reroll_cost(seat)
 	if int(p["gold"]) < cost:
@@ -2060,7 +2073,10 @@ func _advance() -> void:
 		fx.append({"k": "open", "e": board.paths.size() - 1})
 		_offer_merge(board.paths.size() - 1)
 	_make_plan()
-	_deal()
+	for p in players:      # R 능력은 웨이브마다
+		p["r_used"] = false
+	if pick_time():      # 새 테마: 새 손패
+		_deal()
 
 
 func next_online(from: int) -> int:

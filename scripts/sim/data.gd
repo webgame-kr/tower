@@ -50,9 +50,9 @@ const MAT_WAVE := 3
 const MAT_MAX := 12
 static var PATH_BASE := 70    # 입구별 길이 상한 (초원), 테마마다 +8 · 맵마다 다르다 (use_layout)
 const PATH_STEP := 8
-const KIT_SIZE := 4           # 이번 웨이브 공구함 (웨이브마다 카드에서 고른다)
+const KIT_SIZE := 4           # 이번 테마 공구함 (테마가 바뀔 때 카드에서 고른다)
 const HAND_SIZE := 6          # 준비 시작 때 나오는 카드 수
-const REROLL_COST := 30       # 다시 뽑기 (웨이브마다 첫 번은 무료)
+const REROLL_COST := 30       # 다시 뽑기 (테마마다 첫 번은 무료)
 const TEAM_KIT_BONUS := 6     # 팀 공구함이 서로 다른 n종 이상이면 공사 자재 +1
 
 static var hp_mul := 4.6      # 적 체력 배율 (밸런스 조정용)

@@ -538,7 +538,7 @@ func _build_hud() -> void:
 	pick_reroll = _btn(hud, Rect2(), "", _on_reroll, "sec", T.LABEL)
 	for i in GData.KIT_SIZE:
 		var lb := _btn(hud, Rect2(), "", _on_lock.bind(i), "clear")
-		lb.tooltip_text = "잠금: 다음 웨이브에도 이 카드를 남겨요"
+		lb.tooltip_text = "잠금: 다음 테마에도 이 카드를 남겨요"
 		lock_btns.append(lb)
 	for k in GData.REWARDS:
 		reward_btns[k] = _btn(hud, Rect2(), "", _on_vote.bind(k), "clear", T.BODY)
@@ -1708,7 +1708,7 @@ func _update_hud() -> void:
 		if k != "" and GData.is_joint(k):
 			kc = int(ceil(kc * GData.JOINT_FOUND / 10.0)) * 10
 		slot_btns[i].disabled = k == "" or locked or not prep or int(me["gold"]) < kc
-	build_btns["kit"].disabled = not prep
+	build_btns["kit"].disabled = not m.can_pick(s.seat)
 	if prep and _pick_wave != m.wave:      # 준비 시작: 카드 띠가 올라온다
 		_pick_wave = m.wave
 		_kit_pick = []
@@ -4782,7 +4782,7 @@ func _draw_hint(m: GMatch) -> void:
 				sub = "누르고 지도 클릭"
 		if build_btns["kit"].is_hovered():
 			head = "공구함 바꾸기"
-			sub = "1웨이브 준비 중, 짓기 전"
+			sub = "테마가 바뀔 때 고르기" if not m.can_pick(s.seat) else "이번 테마 내내 쓸 4장"
 	if head == "":
 		return
 	var w := maxf(_sz(head, T.STRONG).x + _sz(val, T.STRONG).x + 36, _sz(sub, T.LABEL).x + 24)
@@ -4939,7 +4939,7 @@ func _draw_kit(m: GMatch) -> void:
 	var r := Rect2(230, 394, 794, 218)
 	_nine(r, "panel_steel")
 	var head := Rect2(r.position + Vector2(12, 8), Vector2(r.size.x - 24, 28))
-	var title := "포탑 고르기 %d/%d" % [_kit_pick.size(), need]
+	var title := "%s 포탑 고르기 %d/%d" % [GData.THEMES[GData.theme_of(m.wave)]["name"], _kit_pick.size(), need]
 	if lock != "":
 		title += " · 잠금 %s" % GData.TOWERS[lock]["name"]
 	_tx(head, title, T.LABEL, INK)

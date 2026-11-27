@@ -50,10 +50,12 @@ func ground_err(c: Vector2i, theme: int, for_road: bool) -> String:
 		return "강이에요"
 	if GData.is_pond(c):
 		var st := GData.pond_state(theme)
-		if st == "dry" or (st == "ice" and for_road):
+		if st == "dry" or ((st == "ice" or st == "bog") and for_road):
 			return ""
 		if st == "ice":
 			return "얼음 위에는 길만 낼 수 있어요"
+		if st == "bog":
+			return "늪 위에는 길만 낼 수 있어요"
 		return "용암 웅덩이예요" if st == "lava" else "연못이에요"
 	return ""
 
@@ -71,7 +73,7 @@ func can_build(c: Vector2i, towers: Dictionary, theme := 0, trap := false) -> St
 		return err
 	if is_path(c):
 		return "길 위에는 지을 수 없어요"
-	if theme >= 3 and GData.near_crack(c):
+	if str(GData.THEMES[theme]["zone"]) == "lava" and GData.near_crack(c):
 		return "용암 균열 옆에는 지을 수 없어요"
 	return ""
 

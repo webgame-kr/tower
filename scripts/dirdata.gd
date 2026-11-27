@@ -4,7 +4,7 @@ extends RefCounted
 
 const TOWER_ROW := {"gun": 0, "cannon": 1, "cold": 2, "magnet": 3, "oil": 4, "flame": 5, "sniper": 6, "signal": 7, "searchlight": 8}
 const FOOT := Vector2(23, 43)      # 포탑 한 칸 48x48 의 발
-const ENEMY_FOOT := [41, 41, 41, 41, 41, 41]      # 적 종류별 발 높이 (한 칸 56x44)
+const ENEMY_FOOT := [41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 43, 43, 43, 41, 43, 41, 43]      # 적 종류별 발 높이 (한 칸 56x44)
 const HQ_OFF := Vector2(-12, -12)      # 본부 움직임 그림(128x152) 을 지금 그림(104x136) 자리에 맞추는 어긋남
 const RX_ROW := {"ignite": 0, "harden": 1, "short": 2, "thermal": 3, "super": 4, "brittle": 5, "emag": 6, "melt": 7, "overheat": 8, "shatter": 9, "slip": 10, "amp": 11}
 const MUZZLE := {

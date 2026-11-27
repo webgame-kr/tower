@@ -16,6 +16,7 @@ func _init() -> void:
 		seeds = Array(args[2].split(",")).map(func(v): return int(v))
 	var only := args[3] if args.size() > 3 else ""      # blind / smart 하나만
 	roads = not (args.size() > 4 and args[4] == "noroad")      # 4인은 길 탐색이 무거워 끌 수 있다
+	GData.endless_mode = args.size() > 5 and args[5] == "endless"      # 무한 모드: 몇 웨이브까지 가는지
 	print("hp_mul ", GData.hp_mul)
 	for n in ns:
 		var a := []
@@ -44,7 +45,7 @@ func _run(players: int, sd: int) -> String:
 	for i in players:
 		m.players[i]["role"] = roles[i]
 	var guard := 0
-	while m.phase != "over" and not m.cleared and guard < 900000:
+	while m.phase != "over" and not m.cleared and guard < 3000000:
 		guard += 1
 		if m.phase == "reward":
 			for vk in m.players.size():
@@ -68,4 +69,4 @@ func _run(players: int, sd: int) -> String:
 	var rx := 0
 	for k in m.rx_log:
 		rx += int(m.rx_log[k])
-	return "%s W%d 반응%d" % ["O" if m.cleared else "X", m.wave if not m.cleared else 25, rx]
+	return "%s W%d 반응%d" % ["O" if m.cleared else "X", m.wave if not m.cleared else GData.LAST_WAVE, rx]

@@ -32,6 +32,7 @@ const LAST_WAVE := 25         # 다섯 테마를 모두 지나는 구간
 const THEME_LEN := 5
 const CASTLE_HP := 100
 const START_GOLD := 320
+static var start_gold_override := 0
 const REWARD_HEAL := 10
 const LEAK_FREE := 2          # 웨이브마다 처음 새는 적 2마리는 본부 방벽이 막는다 (피해 0)
 const HQ_WAVE_CAP := 50       # 한 웨이브에 본부가 잃는 내구도 상한 (한 번에 무너지지 않게)
@@ -45,6 +46,7 @@ const ABILITY_SLOW := 0.4
 const MAX_ALIVE := 70
 const TICK := 0.05
 const HP_GROWTH := 0.22
+const ENDLESS_HP := 1.04       # 25웨이브 뒤 웨이브마다 적 체력 ×1.04 (선형 증가 위에 곱)
 
 # ── 길 그리기와 공사 자재 ──
 const MAT_START := 6
@@ -105,18 +107,66 @@ static func lanes_for(players: int) -> int:
 	return clampi(players, 2, 4)
 
 
+## 몇 번째 테마 구간인가 (0부터). 난이도·포탑 해금·길 길이는 이 값을 따른다
+static func stage_of(wave: int) -> int:
+	return maxi((wave - 1) / THEME_LEN, 0)
+
+
+## 이 웨이브의 테마 (THEMES 번호). 판마다 ORDER 로 순서가 섞인다
+static var ORDER: Array = [0, 1, 2, 3, 4]
+static var endless_mode := false      # 대기실에서 고른 무한 모드 (25웨이브에서 끝나지 않음)
+const POOL_A := [1, 2, 5]             # 2·3번째 테마 후보: 설원 · 사막 · 늪 정제소
+const POOL_B := [3, 4, 6, 7]          # 4·5번째 테마 후보: 화산 · 유령 숲 · 폭풍 고원 · 고철 처리장
+
+
 static func theme_of(wave: int) -> int:
-	return clampi((wave - 1) / THEME_LEN, 0, THEMES.size() - 1)
+	var st := stage_of(wave)
+	if st < ORDER.size():
+		return int(ORDER[st])
+	var tail: Array = ORDER.slice(1)      # 무한: 초원을 뺀 테마를 계속 돈다
+	return int(tail[(st - ORDER.size()) % tail.size()])
+
+
+## 판마다 테마 순서: 초원 → A 묶음 2개 → B 묶음 2개 (무한 모드는 남은 테마까지 이어서)
+static var fixed_order := false      # 테스트용: 섞지 않음
+
+
+static func make_order(seed_: int) -> Array:
+	if fixed_order:
+		return [0, 1, 2, 3, 4, 5, 6, 7] if endless_mode else [0, 1, 2, 3, 4]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([seed_, "order"])
+	var a := POOL_A.duplicate()
+	var b := POOL_B.duplicate()
+	_shuffle(a, rng)
+	_shuffle(b, rng)
+	var out := [0, a[0], a[1], b[0], b[1]]
+	if endless_mode:
+		out.append_array([a[2], b[2], b[3]])
+	return out
+
+
+static func _shuffle(arr: Array, rng: RandomNumberGenerator) -> void:
+	for i in range(arr.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var t = arr[i]
+		arr[i] = arr[j]
+		arr[j] = t
+
+
+## 무한 모드 회차 (모든 테마를 한 바퀴 돌 때마다 1씩)
+static func cycle_of(wave: int) -> int:
+	return maxi(stage_of(wave) - (ORDER.size() - 1), 0) / maxi(ORDER.size() - 1, 1) if wave > LAST_WAVE else 0
 
 
 ## 입구별 길이 상한
 static func max_path(wave: int) -> int:
-	return PATH_BASE + PATH_STEP * theme_of(wave)
+	return PATH_BASE + PATH_STEP * mini(stage_of(wave), 4)
 
 
 ## 연못 상태: 물(길·포탑 불가) · 얼음(길 가능, 빙판) · 마른 땅(모두 가능) · 용암(불가)
 static func pond_state(theme: int) -> String:
-	return ["water", "ice", "dry", "lava", "water"][clampi(theme, 0, 4)]
+	return ["water", "ice", "dry", "lava", "water", "bog", "water", "dry"][clampi(theme, 0, 7)]
 
 
 static func in_rects(c: Vector2i, rects: Array) -> bool:
@@ -147,7 +197,7 @@ static func is_pond(c: Vector2i) -> bool:
 
 
 static func is_old_road(c: Vector2i, theme: int) -> bool:
-	return theme >= 2 and in_rects(c, OLD_ROADS)
+	return str(THEMES[theme]["zone"]) == "sand" and in_rects(c, OLD_ROADS)
 
 
 ## 용암 균열 옆 칸 (화산부터 포탑 금지)
@@ -164,9 +214,20 @@ const THEMES := [
 	{"id": "sand", "px": ["#6E685F", "#7A746A", "#C49C36", "#3E3A34"], "name": "사막", "desc": "옛 도로 칸은 자재 0 · 모래바람 구역은 포탑 사거리 감소", "landmark": "모래에 잠긴 수송차", "zone": "sand", "wipe": "#C9A566", "road": [["#000000", 0.98, 0, 0.35], ["#6E6253", 0.94, 0, 1], ["#8A7F71", 0.74, 0, 1], ["#A1968A", 0.3, 0, 0.45], ["#6C6256", 0.05, 1, 0.8]]},
 	{"id": "lava", "px": ["#4E4844", "#5A534E", "#C46A2A", "#1A1716"], "name": "화산", "desc": "균열을 지나는 적은 지속 피해 · 균열 옆에는 포탑 금지", "landmark": "파손된 용광로", "zone": "lava", "wipe": "#7A2412", "road": [["#000000", 0.98, 0, 0.35], ["#1D1918", 0.94, 0, 1], ["#6A615A", 0.74, 0, 1], ["#7D736B", 0.3, 0, 0.45], ["#4E3A33", 0.05, 1, 0.8]]},
 	{"id": "ghost", "px": ["#5A6058", "#666D64", "#6FA894", "#1E221F"], "name": "유령 숲", "desc": "막힌 땅이 열리며 새 입구가 생겨요", "landmark": "거목 급수탑", "zone": "ghost", "wipe": "#2B3F36", "road": [["#000000", 0.98, 0, 0.35], ["#2A2F2A", 0.94, 0, 1], ["#6A7066", 0.74, 0, 1], ["#7D8479", 0.3, 0, 0.45], ["#53594F", 0.05, 1, 0.8]]},
+	{"id": "bog", "px": ["#5E5A48", "#6A6652", "#9AB040", "#262418"], "name": "늪 정제소", "desc": "연못이 늪이 돼 길을 낼 수 있어요 · 늪 길 위 적은 느리고 기름 범벅", "landmark": "녹슨 정제탑", "zone": "bog", "wipe": "#4A5230", "road": [["#000000", 0.98, 0, 0.35], ["#3A3626", 0.94, 0, 1], ["#6E6A52", 0.74, 0, 1], ["#827E64", 0.3, 0, 0.45], ["#55513E", 0.05, 1, 0.8]]},
+	{"id": "storm", "px": ["#6A707C", "#767C88", "#E8D04A", "#262A32"], "name": "폭풍 고원", "desc": "낙뢰 표시가 뜬 칸에 1.5초 뒤 번개 · 맞은 적은 감전, 근처 포탑은 과부하", "landmark": "쓰러진 송전탑", "zone": "storm", "wipe": "#3A4252", "road": [["#000000", 0.98, 0, 0.35], ["#3A3F4A", 0.94, 0, 1], ["#727886", 0.74, 0, 1], ["#868C98", 0.3, 0, 0.45], ["#585E6A", 0.05, 1, 0.8]]},
+	{"id": "scrap", "px": ["#6E6458", "#7A7062", "#C87A3A", "#2A2420"], "name": "고철 처리장", "desc": "자석 크레인 구역 안의 적은 자성 · 쓰러진 적은 고철 더미를 남겨요", "landmark": "멈춘 자석 크레인", "zone": "scrap", "wipe": "#5A4A3A", "road": [["#000000", 0.98, 0, 0.35], ["#3E352C", 0.94, 0, 1], ["#7A6E60", 0.74, 0, 1], ["#8E8272", 0.3, 0, 0.45], ["#5E5446", 0.05, 1, 0.8]]},
 ]
 
 const ICE_SPEED := 1.3
+const BOG_SPEED := 0.75       # 늪 길 위 적 속도 (기름 상태가 붙는다)
+const STORM_EVERY := 16.0     # 폭풍 고원: 낙뢰 주기 (초)
+const STORM_BOLTS := 3        # 한 번에 떨어지는 칸 수
+const STORM_WARN := 1.5       # 표시 뒤 떨어지기까지
+const STORM_R := 0.9          # 맞는 적 반경 (칸)
+const STORM_OVER := 2.0       # 근처 포탑 과부하 (공격 속도 2배, 초)
+const STORM_TOWER_R := 1.5
+const SCRAP_MAG := 1.5        # 고철 처리장: 나올 때 자성 (기본 시간 ×1.5)
 const SAND_RADIUS := 2.6
 const SAND_RANGE := 0.75
 const LAVA_RATE := 0.05       # 초당 최대 체력 비율
@@ -394,7 +455,7 @@ static func is_joint(type: String) -> bool:
 
 static func unlocked(wave: int) -> Array:
 	var out := []
-	for t in theme_of(wave) + 1:
+	for t in stage_of(wave) + 1:
 		for k in UNLOCK[mini(t, UNLOCK.size() - 1)]:
 			if TOWERS.has(k) and not out.has(k):
 				out.append(k)
@@ -405,7 +466,7 @@ static func unlocked(wave: int) -> Array:
 static func fresh_unlocks(wave: int) -> Array:
 	if (wave - 1) % THEME_LEN != 0 or wave <= 1:
 		return []
-	return (UNLOCK[mini(theme_of(wave), UNLOCK.size() - 1)] as Array).filter(func(k): return TOWERS.has(k))
+	return (UNLOCK[mini(stage_of(wave), UNLOCK.size() - 1)] as Array).filter(func(k): return TOWERS.has(k))
 const TRAP_REPAIR := 1
 ## 역할: 대기실에서 하나씩, 같은 역할은 한 명만. 패시브 1 + 웨이브당 1번 R 능력
 const ROLES := {
@@ -448,24 +509,34 @@ const ENEMIES := {
 	"heavy": {"name": "중장갑", "hp": 120.0, "armor": 4.0, "speed": 0.8, "hit": 1, "price": 4.0, "look": [2, ""]},
 	"rusher": {"name": "돌격병", "hp": 42.0, "armor": 0.0, "speed": 2.4, "hit": 1, "price": 1.5, "look": [1, ""]},
 	"healer": {"name": "치유사", "hp": 50.0, "armor": 0.0, "speed": 1.1, "hit": 1, "price": 3.0, "heal": 5.0, "heal_r": 2.0, "look": [4, ""]},
-	"sled": {"name": "썰매병", "hp": 40.0, "armor": 0.0, "speed": 1.5, "hit": 1, "price": 2.0, "ice": 2.0, "look": [1, "#BFE3F2"]},
-	"shield": {"name": "방패병", "hp": 70.0, "armor": 2.0, "speed": 1.0, "hit": 1, "price": 3.0, "slow_res": 0.5, "look": [2, "#9CB4C8"]},
-	"worm": {"name": "굴착 벌레", "hp": 60.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "burrow": [3.0, 1.5], "look": [3, "#C9A566"]},
-	"carrier": {"name": "방패 수송차", "hp": 150.0, "armor": 2.0, "speed": 0.7, "hit": 1, "price": 5.0, "guard": 30.0, "look": [2, "#E9B935"]},
-	"golem": {"name": "내열 골렘", "hp": 160.0, "armor": 6.0, "speed": 0.75, "hit": 1, "price": 5.0, "fireproof": true, "look": [2, "#F47A3A"]},
-	"splitter": {"name": "분열체", "hp": 80.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 3.0, "split": ["mini", 2], "look": [0, "#E0533D"]},
-	"mini": {"name": "작은 분열체", "hp": 25.0, "armor": 0.0, "speed": 1.6, "hit": 1, "price": 0.0, "look": [3, "#E0533D"]},
-	"phantom": {"name": "유령병", "hp": 55.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "phase": [5.0, 2.0], "look": [1, "#8FD9B6"]},
-	"vine": {"name": "덩굴 치유사", "hp": 70.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 4.0, "heal": 4.0, "heal_r": 2.0, "slow_res": 1.0, "look": [4, "#4E7A55"]},
+	"sled": {"name": "썰매병", "hp": 40.0, "armor": 0.0, "speed": 1.5, "hit": 1, "price": 2.0, "ice": 2.0, "look": [6, ""]},
+	"shield": {"name": "방패병", "hp": 70.0, "armor": 2.0, "speed": 1.0, "hit": 1, "price": 3.0, "slow_res": 0.5, "look": [7, ""]},
+	"worm": {"name": "굴착 벌레", "hp": 60.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "burrow": [3.0, 1.5], "look": [8, ""]},
+	"carrier": {"name": "방패 수송차", "hp": 150.0, "armor": 2.0, "speed": 0.7, "hit": 1, "price": 5.0, "guard": 30.0, "look": [9, ""]},
+	"golem": {"name": "내열 골렘", "hp": 160.0, "armor": 6.0, "speed": 0.75, "hit": 1, "price": 5.0, "fireproof": true, "look": [10, ""]},
+	"splitter": {"name": "분열체", "hp": 80.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 3.0, "split": ["mini", 2], "look": [11, ""]},
+	"mini": {"name": "작은 분열체", "hp": 25.0, "armor": 0.0, "speed": 1.6, "hit": 1, "price": 0.0, "look": [12, ""]},
+	"phantom": {"name": "유령병", "hp": 55.0, "armor": 0.0, "speed": 1.2, "hit": 1, "price": 3.0, "phase": [5.0, 2.0], "look": [13, ""]},
+	"vine": {"name": "덩굴 치유사", "hp": 70.0, "armor": 0.0, "speed": 1.0, "hit": 1, "price": 4.0, "heal": 4.0, "heal_r": 2.0, "slow_res": 1.0, "look": [14, ""]},
 	"boss": {"name": "초원 대장", "hp": 380.0, "armor": 3.0, "speed": 0.62, "hit": 15, "price": 0.0, "boss": true, "look": [5, ""], "skill": ""},
-	"walker": {"name": "쇄빙 보행기", "hp": 470.0, "armor": 3.0, "speed": 0.6, "hit": 15, "price": 0.0, "boss": true, "trail": 5.0, "look": [5, "#BFE3F2"], "skill": "지나간 길을 5초 동안 빙판으로"},
-	"fortress": {"name": "모래 수송 요새", "hp": 560.0, "armor": 4.0, "speed": 0.5, "hit": 15, "price": 0.0, "boss": true, "drops": [[0.5, 0.0], "swarm", 8], "look": [5, "#E9B935"], "skill": "체력 50%·0%에서 떼거리 8명"},
-	"giant": {"name": "용광로 거인", "hp": 640.0, "armor": 5.0, "speed": 0.55, "hit": 15, "price": 0.0, "boss": true, "overheat": [8.0, 2.0, 2.0], "fireproof": true, "look": [5, "#F47A3A"], "skill": "8초마다 주변 포탑 과열"},
-	"shadow": {"name": "그림자 사령관", "hp": 720.0, "armor": 3.0, "speed": 0.65, "hit": 15, "price": 0.0, "boss": true, "clone": 0.5, "look": [5, "#8FD9B6"], "skill": "체력 50%에서 분신 소환"},
+	"walker": {"name": "쇄빙 보행기", "hp": 470.0, "armor": 3.0, "speed": 0.6, "hit": 15, "price": 0.0, "boss": true, "trail": 5.0, "look": [22, ""], "skill": "지나간 길을 5초 동안 빙판으로"},
+	"fortress": {"name": "모래 수송 요새", "hp": 560.0, "armor": 4.0, "speed": 0.5, "hit": 15, "price": 0.0, "boss": true, "drops": [[0.5, 0.0], "swarm", 8], "look": [23, ""], "skill": "체력 50%·0%에서 떼거리 8명"},
+	"giant": {"name": "용광로 거인", "hp": 640.0, "armor": 5.0, "speed": 0.55, "hit": 15, "price": 0.0, "boss": true, "overheat": [8.0, 2.0, 2.0], "fireproof": true, "look": [24, ""], "skill": "8초마다 주변 포탑 과열"},
+	"shadow": {"name": "그림자 사령관", "hp": 720.0, "armor": 3.0, "speed": 0.65, "hit": 15, "price": 0.0, "boss": true, "clone": 0.5, "look": [25, ""], "skill": "체력 50%에서 분신 소환"},
+	"toad": {"name": "늪 두꺼비", "hp": 48.0, "armor": 0.0, "speed": 1.4, "hit": 1, "price": 2.5, "burrow": [3.5, 1.0], "look": [15, ""]},
+	"sludge": {"name": "슬러지 통", "hp": 110.0, "armor": 2.0, "speed": 0.8, "hit": 1, "price": 4.0, "split": ["leech", 3], "look": [16, ""]},
+	"leech": {"name": "거머리", "hp": 18.0, "armor": 0.0, "speed": 1.7, "hit": 1, "price": 0.0, "look": [17, ""]},
+	"rod": {"name": "피뢰 보행기", "hp": 75.0, "armor": 3.0, "speed": 1.0, "hit": 1, "price": 3.5, "slow_res": 0.5, "shockproof": true, "look": [18, ""]},
+	"kite": {"name": "돌풍 연", "hp": 36.0, "armor": 0.0, "speed": 1.9, "hit": 1, "price": 2.0, "phase": [4.0, 1.5], "flying": true, "look": [19, ""]},
+	"scav": {"name": "고철 수집가", "hp": 90.0, "armor": 3.0, "speed": 0.95, "hit": 1, "price": 3.5, "guard": 20.0, "look": [20, ""]},
+	"repair": {"name": "자가수리 로봇", "hp": 85.0, "armor": 1.0, "speed": 1.0, "hit": 1, "price": 3.5, "heal": 6.0, "heal_r": 1.2, "look": [21, ""]},
+	"dredger": {"name": "준설 크롤러", "hp": 600.0, "armor": 4.0, "speed": 0.5, "hit": 15, "price": 0.0, "boss": true, "drops": [[0.66, 0.33], "toad", 5], "look": [26, ""], "skill": "체력 66%·33%에서 늪 두꺼비 5마리"},
+	"stormship": {"name": "뇌운 함선", "hp": 620.0, "armor": 3.0, "speed": 0.6, "hit": 15, "price": 0.0, "boss": true, "overheat": [10.0, 2.5, 3.0], "look": [27, ""], "skill": "10초마다 주변 포탑 과열"},
+	"crusher": {"name": "철갑 분쇄기", "hp": 680.0, "armor": 8.0, "speed": 0.5, "hit": 15, "price": 0.0, "boss": true, "drops": [[0.5], "scav", 3], "look": [28, ""], "skill": "방어 8 · 체력 50%에서 고철 수집가 3"},
 }
 ## 테마별 전용 적과 보스 (전용 적은 앞 테마에서 통하던 전략을 하나씩 막는다)
-const THEME_FOES := [["healer"], ["sled", "shield"], ["worm", "carrier"], ["golem", "splitter"], ["phantom", "vine"]]
-const THEME_BOSS := ["boss", "walker", "fortress", "giant", "shadow"]
+const THEME_FOES := [["healer"], ["sled", "shield"], ["worm", "carrier"], ["golem", "splitter"], ["phantom", "vine"], ["toad", "sludge"], ["rod", "kite"], ["scav", "repair"]]
+const THEME_BOSS := ["boss", "walker", "fortress", "giant", "shadow", "dredger", "stormship", "crusher"]
 const GAPS := {"grunt": 0.9, "swarm": 0.4, "heavy": 2.6, "rusher": 0.7}
 
 
@@ -487,12 +558,26 @@ static func early_bonus(alive: int) -> int:
 	return clampi(alive * EARLY_PER_ENEMY, EARLY_MIN, EARLY_MAX)
 
 
+const FIRST_BOSS_HP := 0.75
+static var HQ_GUN_AMMO := 10      # 본부 방어포: 첫 테마 웨이브마다 탄 수 (뒤로 갈수록 줄어든다, HQ_GUN_FALL)
+const HQ_GUN_FALL := [1.0, 0.5, 0.25, 0.0]   # 테마 구간별 탄 배율 (4번째 테마부터 없음)
+const HQ_GUN_RANGE := 3.0         # 본부 가장자리에서 칸
+const HQ_GUN_CD := 0.5
+const HQ_GUN_DMG := 0.4           # 한 발 = 그 웨이브 일반병 체력의 40%
+static var EARLY_BUDGET := [0.4, 0.55, 0.7, 0.85, 1.0]   # 첫 테마 웨이브별 적 수 배율 (초반 완충)
+
+
 static func wave_budget(wave: int, players: int) -> float:
-	return (20.0 + wave * 6.0) * float(budget_scale.get(clampi(players, 1, 4), 1.0)) * float(DIFFICULTY[difficulty][1])
+	var early: float = EARLY_BUDGET[wave - 1] if wave <= EARLY_BUDGET.size() else 1.0
+	return early * (20.0 + wave * 6.0) * float(budget_scale.get(clampi(players, 1, 4), 1.0)) * float(DIFFICULTY[difficulty][1])
+
+
+static var EARLY_HP := [0.5, 0.6, 0.7, 0.85, 1.0]   # 첫 테마 웨이브별 적 체력 배율 (초반 완충)
 
 
 static func wave_hp(wave: int, players := 2) -> float:
-	return (1.0 + maxi(wave - 6, 0) * HP_GROWTH) * float(hp_scale.get(clampi(players, 1, 4), 1.0)) * float(DIFFICULTY[difficulty][0])
+	var early: float = EARLY_HP[wave - 1] if wave <= EARLY_HP.size() else 1.0
+	return early * pow(ENDLESS_HP, maxi(wave - LAST_WAVE, 0)) * (1.0 + maxi(wave - 6, 0) * HP_GROWTH) * float(hp_scale.get(clampi(players, 1, 4), 1.0)) * float(DIFFICULTY[difficulty][0])
 
 
 ## 위협 예산으로 웨이브를 만든다. 결과: [입구, 적, 수, 간격(초), 시작(초)] 묶음들.
@@ -533,7 +618,9 @@ static func make_wave(wave: int, players: int, lanes: int, seed_: int, weak := -
 		budget *= 0.5
 	var special := 0.0
 	var special_types: Array = []
-	if k == 1:
+	if theme == 0 and k < 3 and wave <= THEME_LEN:
+		pass      # 첫 테마 1·2웨이브는 공통 적만 (전용 적은 3웨이브부터)
+	elif k == 1:
 		special = 0.4
 		special_types = [foes[0]]
 	elif k == 2:

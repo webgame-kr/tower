@@ -61,9 +61,10 @@ func _init(names: Array = [], kits: Array = [], seed_value := -1) -> void:
 	gate_dmg.resize(lanes)
 	gate_dmg.fill(0)
 	seed_ = seed_value if seed_value >= 0 else randi() % 1000000
+	GData.ORDER = GData.make_order(seed_)
 	for i in names.size():
 		var kit: Array = (kits[i] as Array).duplicate() if i < kits.size() and kits[i] is Array and not (kits[i] as Array).is_empty() else GData.DEFAULT_KIT.duplicate()
-		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD, "mat": GData.MAT_START, "kit": kit,
+		players.append({"name": str(names[i]), "col": i, "gold": GData.START_GOLD if GData.start_gold_override == 0 else GData.start_gold_override, "mat": GData.MAT_START, "kit": kit,
 			"ready": false, "online": true, "used": false, "dmg": 0.0, "kills": 0, "slow": 0.0, "support": 0,
 			"fast": false, "free_up": 0, "vote": "", "call": false, "roads": 0, "rx": 0, "inv": 0,
 			"role": "", "r_used": false, "given": 0, "free_reroll": 0, "volley_t": 0.0,
@@ -1251,6 +1252,7 @@ func _start_wave() -> void:
 	phase = "combat"
 	_wave_hq = 0
 	_wave_leak_n = 0
+	hq_ammo = int(round(GData.HQ_GUN_AMMO * float(GData.HQ_GUN_FALL[mini(GData.stage_of(wave), GData.HQ_GUN_FALL.size() - 1)])))
 	drafts = {}
 	offer = {}
 	_undo = {}
@@ -1285,11 +1287,15 @@ func _start_wave() -> void:
 func _spawn(type: String, e: int, dist := 0.0, hp_ratio := 1.0) -> Dictionary:
 	var d: Dictionary = GData.ENEMIES[type]
 	var max_hp: float = float(d["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size())
+	if GData.is_boss(type) and wave <= GData.THEME_LEN:
+		max_hp *= GData.FIRST_BOSS_HP      # 첫 보스는 조금 약하게
 	var en := {"id": _next_id, "type": type, "e": e, "dist": dist, "hp": max_hp * hp_ratio, "max": max_hp * hp_ratio,
 		"slow": 0.0, "slow_t": 0.0, "sh": 0.0, "cell": -1, "sk": 0.0, "done": [], "st": {}, "rx_t": 0.0, "stun": 0.0,
 		"arm_dn": 0.0, "brit_t": 0.0, "melt_t": 0.0}
 	_next_id += 1
 	enemies.append(en)
+	if _zone() == "scrap":      # 고철 처리장: 자석 크레인 구역을 지나 나온 적은 자성
+		_apply_status(en, "mag", 0, GData.SCRAP_MAG)
 	return en
 
 
@@ -1314,6 +1320,7 @@ func step(dt := GData.TICK) -> void:
 	if phase == "over":
 		return
 	_enemy_skills(dt)
+	_storm(dt)
 	_fire(dt)
 	if _queue.is_empty() and enemies.is_empty():
 		_finish_wave()
@@ -1334,12 +1341,16 @@ func _auto_upgrades(dt: float) -> void:
 			version += 1
 
 
+func on_bog(c: Vector2i) -> bool:
+	return GData.pond_state(theme()) == "bog" and GData.is_pond(c)
+
+
 func on_ice(c: Vector2i) -> bool:
 	return ice_t.has(c) or (GData.pond_state(theme()) == "ice" and GData.is_pond(c))
 
 
 func on_lava(c: Vector2i) -> bool:
-	return theme() >= 3 and GData.CRACKS.has(c)
+	return _zone() == "lava" and GData.CRACKS.has(c)
 
 
 ## 공동 구간(합류한 뒤 함께 쓰는 길) 2칸 안 칸, 교차로 칸
@@ -1387,6 +1398,8 @@ func _move_enemies(dt: float) -> void:
 		var boost := 1.0
 		if on_ice(cell):
 			boost = float(d.get("ice", GData.ICE_SPEED))
+		elif on_bog(cell) and not bool(d.get("flying", false)):
+			boost = GData.BOG_SPEED
 		var slow := move_slow(en)
 		if float(en.get("wait", 0.0)) > 0.0:      # 교차로에서 멈칫
 			en["wait"] = float(en["wait"]) - dt
@@ -1406,6 +1419,8 @@ func _move_enemies(dt: float) -> void:
 			en["cell"] = ci
 			if is_cross(cell):
 				en["wait"] = GData.CROSS_WAIT
+			if on_bog(cell) and not bool(d.get("flying", false)) and not (en["st"] as Dictionary).has("oil"):
+				_apply_status(en, "oil", 0)
 			if float(d.get("trail", 0.0)) > 0.0:
 				ice_t[cell] = float(d["trail"])
 			if puddle_t.has(cell):
@@ -1437,6 +1452,8 @@ func _move_enemies(dt: float) -> void:
 
 
 func _trap(en: Dictionary, cell: Vector2i) -> void:
+	if bool(GData.ENEMIES[en["type"]].get("flying", false)):      # 돌풍 연: 함정 위를 날아 넘는다
+		return
 	for id in towers:
 		var t: Dictionary = towers[id]
 		if int(t["x"]) != cell.x or int(t["y"]) != cell.y or not is_trap(t) or int(t["uses"]) <= 0:
@@ -1520,6 +1537,65 @@ func _pos(en: Dictionary) -> Vector2:
 	return Board.pos_on(board.paths[en["e"]], float(en["dist"]))
 
 
+## 폭풍 고원 낙뢰: 표시 → 1.5초 뒤 그 칸 둘레 적 감전, 근처 포탑 과부하
+var bolts: Array = []        # [칸, 남은 시간]
+var _storm_t := 6.0
+
+
+func _storm(dt: float) -> void:
+	if _zone() != "storm":
+		bolts.clear()
+		return
+	_storm_t -= dt
+	if _storm_t <= 0.0:
+		_storm_t = GData.STORM_EVERY
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash([seed_, wave, int(time * 10.0)])
+		for _i in GData.STORM_BOLTS:
+			var lane: Array = board.paths[rng.randi_range(0, board.paths.size() - 1)]
+			var c: Vector2i = lane[rng.randi_range(int(lane.size() * 0.2), lane.size() - 3)]
+			bolts.append([c, GData.STORM_WARN])
+			fx.append({"k": "bolt_warn", "x": c.x, "y": c.y})
+	for b in bolts.duplicate():
+		b[1] = float(b[1]) - dt
+		if float(b[1]) > 0.0:
+			continue
+		bolts.erase(b)
+		var at := Vector2(b[0]) + Vector2(0.5, 0.5)
+		fx.append({"k": "bolt", "x": at.x, "y": at.y})
+		for en in enemies.duplicate():
+			if not bool(GData.ENEMIES[en["type"]].get("shockproof", false)) and _pos(en).distance_to(at) <= GData.STORM_R:
+				_apply_status(en, "shock", 0)
+		for id in towers:
+			var t: Dictionary = towers[id]
+			if (Vector2(int(t["x"]), int(t["y"])) + Vector2(0.5, 0.5)).distance_to(at) <= GData.STORM_TOWER_R:
+				t["over_t"] = maxf(float(t.get("over_t", 0.0)), GData.STORM_OVER)
+
+
+## 본부 방어포: 본부 가까이 온 적을 쏜다. 웨이브마다 탄이 정해져 있어 막판 지킴이 역할만 한다
+var hq_ammo := 0
+var _hq_cd := 0.0
+
+
+func _hq_gun(dt: float) -> void:
+	_hq_cd -= dt
+	if _hq_cd > 0.0 or hq_ammo <= 0 or GData.HQ_GUN_AMMO <= 0:
+		return
+	var c := Vector2(GData.CASTLE.position) + Vector2(GData.CASTLE.size) * 0.5
+	var r := float(GData.CASTLE.size.x) * 0.5 + GData.HQ_GUN_RANGE
+	var target := _pick(c, r, "first")
+	if target.is_empty():
+		return
+	_hq_cd = GData.HQ_GUN_CD
+	hq_ammo -= 1
+	var s := GData.tower_stats("gun", 1, "")
+	s["tid"] = -1
+	s["phys"] = true
+	s["dmg"] = float(GData.ENEMIES["grunt"]["hp"]) * GData.hp_mul * GData.wave_hp(wave, players.size()) * GData.HQ_GUN_DMG
+	fx.append({"k": "shot", "ty": "hq", "x": c.x, "y": c.y, "tx": _pos(target).x, "ty2": _pos(target).y, "r": 0.0})
+	_hurt(target, s, 0)
+
+
 func _fire(dt: float) -> void:
 	for p in players:
 		if float(p.get("volley_t", 0.0)) > 0.0:
@@ -1528,6 +1604,7 @@ func _fire(dt: float) -> void:
 		walls[k] = float(walls[k]) - dt
 		if float(walls[k]) <= 0.0:
 			walls.erase(k)
+	_hq_gun(dt)
 	for id in towers:
 		var t: Dictionary = towers[id]
 		if float(t.get("over_t", 0.0)) > 0.0:
@@ -1686,7 +1763,7 @@ func _zone() -> String:
 
 ## 이번 웨이브 모래바람 중심 (준비 단계에 공개, 웨이브마다 자리가 바뀜)
 func sand_spot() -> Vector2:
-	if theme() != 2 or GData.SAND_SPOTS.is_empty():
+	if _zone() != "sand" or GData.SAND_SPOTS.is_empty():
 		return Vector2(-99, -99)
 	return GData.SAND_SPOTS[absi(hash([seed_, wave])) % GData.SAND_SPOTS.size()]
 
@@ -2059,7 +2136,7 @@ func _finish_wave() -> void:
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
 	_role_income()
 	_log_hp()
-	if wave >= GData.LAST_WAVE and not endless:      # 25웨이브 방어 성공 → 무한 방어로 계속
+	if wave >= GData.LAST_WAVE and not endless and not GData.endless_mode:      # 25웨이브 방어 성공 → 무한 방어로 계속
 		cleared = true
 		endless = true
 		fx.append({"k": "endless"})
@@ -2129,7 +2206,7 @@ func to_data() -> Dictionary:
 	for s in players.size():
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "of": offer, "sk": shared_kills, "en": endless, "gd": gate_dmg,
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "of": offer, "sk": shared_kills, "en": endless, "or": GData.ORDER, "em": GData.endless_mode, "gd": gate_dmg,
 		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "wl": _walls_data(), "rl": rx_log, "sr": seen_rx, "jd": snappedf(joint_dmg, 1.0), "tl": _tower_log_data()}
 
 
@@ -2202,6 +2279,9 @@ func load_data(d: Dictionary) -> void:
 	offer = d.get("of", {}) if d.get("of", {}) is Dictionary else {}
 	shared_kills = int(d.get("sk", 0))
 	endless = bool(d.get("en", false))
+	if d.has("or"):
+		GData.ORDER = (d["or"] as Array).map(func(v): return int(v))
+	GData.endless_mode = bool(d.get("em", false))
 	gate_dmg = []
 	for v in d["gd"]:
 		gate_dmg.append(int(v))

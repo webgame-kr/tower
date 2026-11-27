@@ -131,7 +131,7 @@ var _snd := {}                # 소리 낼 때를 알기 위한 지난 상태
 const TW_SFX := {"gun": "tw_gun", "cannon": "tw_cannon", "cold": "tw_frost", "magnet": "tw_magnet", "oil": "tw_oil", "flame": "tw_fire",
 	"shock": "tw_tesla", "sniper": "tw_sniper", "signal": "tw_signal", "spike": "tw_spike", "steam": "tw_steam", "crane": "tw_crane",
 	"generator": "tw_generator", "conveyor": "tw_conveyor", "welder": "tw_welder", "cryo": "tw_cryo", "searchlight": "tw_searchlight",
-	"scrap": "tw_scrap", "railgun": "tw_sniper", "chiller": "tw_cryo", "smelter": "tw_fire"}
+	"scrap": "tw_scrap", "railgun": "tw_sniper", "chiller": "tw_cryo", "smelter": "tw_fire", "hq": "tw_gun"}
 const RX_SFX := {"ignite": "ignite", "harden": "lock", "short": "short", "thermal": "thermal", "super": "supercond", "brittle": "brittle",
 	"emag": "emag", "melt": "heatarmor", "overheat": "overheat", "shatter": "shatter", "slip": "slip", "amp": "amplify"}
 const PING_SFX := {"look": "ping_look", "danger": "ping_warn", "build": "ping_build", "road": "ping_road", "mine": "ping_flag"}
@@ -191,6 +191,7 @@ var slot_btns: Array = []
 var kit_btns := {}
 var lobby_kit := {}
 var diff_btns := {}
+var mode_btns := {}
 var fix_btn
 var confirm_btn: Button
 var accept_btn: Button
@@ -513,6 +514,9 @@ func _build_lobby() -> void:
 	for k in GData.DIFFICULTY:
 		diff_btns[k] = _btn(lobby, Rect2(), str(GData.DIFFICULTY[k][2]), _on_diff.bind(k), "sec", T.BODY)
 		diff_btns[k].toggle_mode = true
+	for k in ["normal", "endless"]:
+		mode_btns[k] = _btn(lobby, Rect2(), "25웨이브" if k == "normal" else "무한 모드", _on_mode.bind(k == "endless"), "sec", T.BODY)
+		mode_btns[k].toggle_mode = true
 	_btn(lobby, Rect2(638, 600, 176, 56), "나가기     ", _on_leave, "sec", T.BODY)
 	for i in GData.ROLE_ORDER.size():
 		role_pick_btns.append(_btn(lobby, Rect2(332 + i * 166, 354, 160, 158), "", _on_role_pick.bind(GData.ROLE_ORDER[i]), "clear"))
@@ -673,7 +677,7 @@ func _evict() -> void:
 	elif s != null and s.m != null:
 		var t := GData.theme_of(s.m.wave)
 		keep[t] = true
-		keep[mini(t + 1, GData.THEMES.size() - 1)] = true
+		keep[GData.theme_of(s.m.wave + GData.THEME_LEN)] = true
 		keep[_theme] = true
 	for key in _theme_tex.keys():
 		if not keep.has(int(str(key).left(1))):
@@ -870,6 +874,11 @@ func _on_lobby_kit(k: String) -> void:
 func _on_diff(k: String) -> void:
 	if s and s.is_host:
 		s.set_difficulty(k)
+
+
+func _on_mode(on: bool) -> void:
+	if s and s.is_host:
+		s.set_endless(on)
 
 
 func _on_lobby_ready() -> void:
@@ -1180,9 +1189,10 @@ func _update_theme(delta: float) -> void:
 		if _trans_t <= 0.0:
 			_theme = _theme_goal
 			_notice_t = 4.0
-	elif m.wave % GData.THEME_LEN == 0 and goal + 1 < GData.THEMES.size():   # 다음 테마를 예고 시점부터 준비
-		_tex(goal + 1, "base")
-		_tex(goal + 1, "over")
+	elif m.wave % GData.THEME_LEN == 0:   # 다음 테마를 예고 시점부터 준비 (판마다 순서가 다르다)
+		var nxt := GData.theme_of(m.wave + 1)
+		_tex(nxt, "base")
+		_tex(nxt, "over")
 
 
 func _tex(theme: int, part: String) -> Texture2D:
@@ -1234,6 +1244,11 @@ func _update_lobby(delta: float) -> void:
 		diff_btns[k].disabled = not s.is_host
 		diff_btns[k].set_pressed_no_signal(s.difficulty == k)
 		di += 1
+	for k in mode_btns:
+		mode_btns[k].position = Vector2(16 + (0 if k == "normal" else 144), 474)
+		mode_btns[k].size = Vector2(138, 36)
+		mode_btns[k].disabled = not s.is_host
+		mode_btns[k].set_pressed_no_signal(s.endless == (k == "endless"))
 	start_btn.visible = true
 	var roles_ok := true
 	for st in s.seats:
@@ -1446,6 +1461,12 @@ func _take_fx() -> void:
 			"endless":
 				sfx.play("wv_reward")
 				_say("%d웨이브 돌파! 이제부터 무한 방어 · 어디까지 버틸까요" % GData.LAST_WAVE)
+			"bolt_warn":
+				sfx.play("ping_warn", 0.5)
+			"bolt":
+				sfx.play("tw_tesla")
+				_shake = maxf(_shake, 4.0)
+				_fxs.append({"k": "bolt", "a": Vector2(float(f["x"]), float(f["y"])), "t": 0.35, "life": 0.35})
 	s.fx = []
 	if _fxs.size() > 140:
 		_fxs = _fxs.slice(_fxs.size() - 140)
@@ -2779,16 +2800,33 @@ func _draw_zones() -> void:
 	for c in m.ice_t:      # 보스가 남긴 빙판 자국
 		var a := _p(Vector2(c))
 		_prect(Rect2(a + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), Color("BFE8F7", 0.55))
+	var zone := str(GData.THEMES[th]["zone"])
+	# 늪 정제소: 늪 연못 위로 길을 낼 수 있다 (느림 + 기름)
+	if GData.pond_state(th) == "bog":
+		for r in GData.PONDS:
+			var on_road := false
+			for p in m.board.paths:
+				for c in p:
+					if (r as Rect2i).has_point(c):
+						on_road = true
+			if on_road or editing:
+				_zone_cells(r, Color("B8C878"), Color("8AA040"), "늪 · 길만 · 느림 + 기름", Vector2i(0, 2), on_road)
+	# 폭풍 고원: 낙뢰 표시
+	for b in m.bolts:
+		var a := _p(Vector2(b[0]))
+		var blink := 0.45 + 0.4 * sin(_tick * 18.0)
+		_prect(Rect2(a + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)), Color("FFE65A", blink * 0.35))
+		_prect(Rect2(a + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)), Color("FFE65A", blink), false, 2.0)
 	# 사막: 옛 도로는 자재 없이 길을 낼 수 있다
-	if th >= 2:
+	if zone == "sand":
 		for r in GData.OLD_ROADS:
 			var a := _p(Vector2(r.position))
 			var b := _p(Vector2(r.end))
 			_dashed_rect(Rect2(a, b - a), Color("FFE9A8"))
 			if editing:
 				_zone_tag(_tag_spot(r), "옛 도로 · 자재 0", Color("FFE9A8"))
-	# 화산부터: 균열 칸을 지나는 적은 지속 피해
-	if th >= 3:
+	# 화산: 균열 칸을 지나는 적은 지속 피해
+	if zone == "lava":
 		for c in GData.CRACKS:
 			var a := _p(Vector2(c))
 			var live := m.board.is_path(c)
@@ -3065,6 +3103,21 @@ func _draw_env() -> void:
 			for i in int(12 * scale_n):
 				var k := fmod(_tick * 0.09 + i * 0.21, 1.0)
 				_pcircle(f.position + Vector2(fposmod(i * 113.0 + sin(k * 6.0) * 10.0, f.size.x), f.size.y * k), 1.2, Color("9FF0D0", 0.5 * sin(k * PI)))
+		"bog":
+			for i in int(16 * scale_n):      # 늪 거품
+				var k := fmod(_tick * (0.25 + i % 3 * 0.07) + i * 0.19, 1.0)
+				var p := f.position + Vector2(fposmod(i * 97.0, f.size.x), fposmod(i * 61.0, f.size.y))
+				_pcircle(p, 1.0 + k * 2.5, Color("B8D060", 0.45 * (1.0 - k)))
+		"storm":
+			for i in int(40 * scale_n):      # 비스듬한 빗줄기
+				var x := fposmod(i * 67.0 + _tick * 120.0, f.size.x)
+				var y := fposmod(i * 43.0 + _tick * 420.0, f.size.y)
+				var p := f.position + Vector2(x, y)
+				_pline(p, p + Vector2(-3, 9), Color(0.78, 0.84, 0.95, 0.35), 1.0)
+		"scrap":
+			for i in int(10 * scale_n):      # 날리는 녹 가루와 불티
+				var k := fmod(_tick * 0.15 + i * 0.23, 1.0)
+				_pcircle(f.position + Vector2(fposmod(i * 127.0 + k * 140.0, f.size.x), fposmod(i * 71.0 - k * 30.0, f.size.y)), 1.2, Color("E08A3A", 0.6 * sin(k * PI)))
 		_:
 			if not fx_low:
 				for i in 7:
@@ -3527,6 +3580,16 @@ func _draw_fx() -> void:
 					"cold":
 						_pline(a, b, Color(ICE, k), 2.0)
 						_pcircle(b, float(f["r"]) * CELL, Color(ICE, k * 0.16))
+					"hq":
+						_pline(a, b, Color("FFC060", k), 2.0)
+						_pcircle(b, 4.0, Color(1, 0.9, 0.6, k))
+			"bolt":
+				var b := _p(f["a"] * 1.0)
+				var pts := PackedVector2Array([b + Vector2(0, -CELL * 3)])
+				for n in 5:
+					pts.append(b + Vector2((n % 2 * 2 - 1) * 6.0, -CELL * 3 + CELL * 3 * (n + 1) / 5.0))
+				_ppoly(pts, Color("FFF4A0", k), 3.0)
+				_pcircle(b, CELL * 0.9 * (1.2 - k * 0.4), Color("FFE65A", k * 0.35))
 			"ability":
 				var c := _p(f["a"] * 1.0)
 				var rr := GData.ABILITY_RADIUS * CELL
@@ -3890,7 +3953,7 @@ func _draw_lobby() -> void:
 	_tx(Rect2(16, 374, 280, 24), ("%d인 합류 맵 · 입구 2" % maxi(n, 2)) if n <= 2 else "%d인 네 갈래 맵 · 입구 %d" % [n, n], T.LABEL, INK)
 	_tx(Rect2(16, 406, 200, 24), "난이도", T.LABEL, SUB)
 	var dd: Array = GData.DIFFICULTY[s.difficulty]
-	_tx(Rect2(16, 480, 280, 24), "적 체력 ×%.2f" % float(dd[0]), T.LABEL, SUB)
+	_tx(Rect2(196, 406, 100, 24), "체력 ×%.2f" % float(dd[0]), T.LABEL, SUB)
 	# 가운데: 팀원 4칸 + 내 공구함
 	for i in GSession.MAX_SEATS:
 		_draw_crew(i)
@@ -5388,7 +5451,7 @@ func _draw_result() -> void:
 		_t(Vector2(32, 68), "방장과 연결이 끊겼어요 · 패배 기록이 아니에요", T.LABEL, SUB)
 	elif m != null and m.cleared:
 		_t(Vector2(32, 24), "무한 방어 %d웨이브" % maxi(m.failed_wave - 1, GData.LAST_WAVE), T.BIG, AMBER)
-		_t(Vector2(32, 68), "%d웨이브를 넘겨 다섯 테마를 모두 버텼어요 · 다음엔 더 멀리?" % GData.LAST_WAVE, T.LABEL, SUB)
+		_t(Vector2(32, 68), "%d웨이브를 넘겨 다섯 테마를 모두 버텼어요 · 다음엔 무한 모드로?" % GData.LAST_WAVE, T.LABEL, SUB)
 	else:
 		_t(Vector2(32, 24), "본부가 무너졌어요", T.BIG, LAMP)
 		if m != null:

@@ -16,6 +16,11 @@ func _init() -> void:
 	GData.hp_mul = 1.8      # 수치 테스트는 기준 배율로 (반응 피해 비례 1배)
 	GData.RX_DMG = 1.0
 	GData.BURN_DPS = 4.0
+	# 규칙 수치 테스트는 초반 완충·본부 방어포·테마 섞기 없이 (따로 _buffer 에서 확인)
+	GData.EARLY_HP = [1.0, 1.0, 1.0, 1.0, 1.0]
+	GData.EARLY_BUDGET = [1.0, 1.0, 1.0, 1.0, 1.0]
+	GData.HQ_GUN_AMMO = 0
+	GData.fixed_order = true
 	_layout()
 	_roads()
 	_merge()
@@ -35,6 +40,7 @@ func _init() -> void:
 	_joints()
 	_sync()
 	_cross()
+	_buffer()
 	print("%d/%d passed" % [total - fails, total])
 	quit(1 if fails > 0 else 0)
 
@@ -515,7 +521,7 @@ func _waves() -> void:
 	var bosses := {}
 	for k in GData.THEME_BOSS:
 		bosses[k] = true
-	ok(bosses.size() == 5, "보스 5종이 모두 다름")
+	ok(bosses.size() == GData.THEMES.size(), "테마마다 보스가 모두 다름")
 	var first := GData.make_wave(6, 2, 2, 3)
 	var lanes := {}
 	for g in first:
@@ -1003,3 +1009,61 @@ func _sync() -> void:
 		m.step()
 	copy.load_enemies(JSON.parse_string(JSON.stringify(m.enemies_data())))
 	ok(copy.enemies.size() == m.enemies.size() and copy.enemies.size() > 0, "사본 적 목록")
+
+
+## 초반 완충 · 테마 순서 · 무한 모드
+func _buffer() -> void:
+	GData.EARLY_HP = [0.5, 0.6, 0.7, 0.85, 1.0]
+	GData.EARLY_BUDGET = [0.4, 0.55, 0.7, 0.85, 1.0]
+	ok(is_equal_approx(GData.wave_hp(1, 2), 0.5) and is_equal_approx(GData.wave_hp(6, 2), 1.0), "초반 완충: 1웨이브 체력 ×0.5, 6웨이브부터 ×1")
+	ok(GData.wave_budget(1, 2) < GData.wave_budget(6, 2) * 0.4, "초반 완충: 1웨이브 적 수가 적다")
+	var w1 := GData.make_wave(1, 2, 2, 7)
+	ok(w1.all(func(g): return ["grunt", "swarm"].has(str(g[1]))), "초원 1·2웨이브는 공통 적만")
+	GData.fixed_order = false
+	var o := GData.make_order(5)
+	ok(o.size() == 5 and int(o[0]) == 0 and GData.POOL_A.has(o[1]) and GData.POOL_A.has(o[2]) and GData.POOL_B.has(o[3]) and GData.POOL_B.has(o[4]), "테마 순서: 초원 → A 묶음 2 → B 묶음 2")
+	GData.endless_mode = true
+	var oe := GData.make_order(5)
+	var uniq := {}
+	for t in oe:
+		uniq[int(t)] = true
+	ok(oe.size() == 8 and uniq.size() == 8, "무한 모드는 8테마를 모두 지난다")
+	GData.ORDER = oe
+	ok(GData.theme_of(41) != 0 and GData.THEMES.size() == 8, "무한: 8테마 뒤에는 초원을 빼고 다시 돈다")
+	ok(GData.wave_hp(30, 2) > GData.wave_hp(29, 2) * 1.04, "무한: 25웨이브 뒤 체력이 더 가파르게")
+	GData.endless_mode = false
+	GData.fixed_order = true
+	GData.ORDER = [0, 1, 2, 3, 4]
+	GData.HQ_GUN_AMMO = 10
+	var m := GMatch.new(["a", "b"], [], 3)
+	m._start_wave()
+	ok(m.hq_ammo == 10, "본부 방어포: 첫 테마는 웨이브마다 탄 10발")
+	m.wave = 16
+	m._start_wave()
+	ok(m.hq_ammo == 0, "본부 방어포: 4번째 테마부터 없음")
+	GData.HQ_GUN_AMMO = 0
+	GData.EARLY_HP = [1.0, 1.0, 1.0, 1.0, 1.0]
+	GData.EARLY_BUDGET = [1.0, 1.0, 1.0, 1.0, 1.0]
+	# 새 테마 구역
+	GData.ORDER = [0, 5, 6, 7, 4]
+	var mb := GMatch.new(["a", "b"], [], 3)
+	GData.ORDER = [0, 5, 6, 7, 4]
+	mb.wave = 6
+	var pond: Rect2i = GData.PONDS[0]
+	ok(mb.board.ground_err(pond.position, mb.theme(), true) == "" and mb.board.ground_err(pond.position, mb.theme(), false) != "", "늪: 늪 연못 위에는 길만")
+	ok(mb.on_bog(pond.position), "늪: 늪 칸 판정")
+	mb.wave = 11
+	mb.phase = "combat"
+	var en := mb._spawn("grunt", 0, 10.0)
+	var lane: Array = mb.board.paths[0]
+	mb.bolts = [[lane[10], 0.01]]
+	mb._storm(0.05)
+	ok((en["st"] as Dictionary).has("shock"), "폭풍: 낙뢰 맞은 적은 감전")
+	var rodd := mb._spawn("rod", 0, 10.0)
+	mb.bolts = [[lane[10], 0.01]]
+	mb._storm(0.05)
+	ok(not (rodd["st"] as Dictionary).has("shock"), "폭풍: 피뢰 보행기는 감전 안 됨")
+	mb.wave = 16
+	var sc := mb._spawn("grunt", 0, 2.0)
+	ok((sc["st"] as Dictionary).has("mag"), "고철: 나온 적은 자성")
+	GData.ORDER = [0, 1, 2, 3, 4]

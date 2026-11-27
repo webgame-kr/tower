@@ -45,7 +45,7 @@ const ABILITY_TIME := 3.0
 const ABILITY_SLOW := 0.4
 const MAX_ALIVE := 70
 const TICK := 0.05
-const HP_GROWTH := 0.22
+const HP_GROWTH := 0.25
 const ENDLESS_HP := 1.04       # 25웨이브 뒤 웨이브마다 적 체력 ×1.04 (선형 증가 위에 곱)
 
 # ── 길 그리기와 공사 자재 ──

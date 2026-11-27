@@ -41,6 +41,9 @@ var _wave_t := 0.0
 var _next_id := 1
 var offer: Dictionary = {}    # 새 입구 길을 공동 구간에 합류시키는 제안 {e, path, cost, merge}
 var shared_kills := 0         # 공동 구간에서 막은 적 (결과 화면)
+var endless := false         # 25웨이브를 넘긴 뒤 무한 방어
+var _wave_hq := 0             # 이번 웨이브 본부 피해
+var _wave_leak_n := 0         # 이번 웨이브 새어 들어온 적 수
 var _lane_sig := 0           # 길 모양이 바뀌면 공동 구간·교차로 캐시를 다시 만든다
 var _near_shared: Dictionary = {}
 var _shared: Dictionary = {}
@@ -1246,6 +1249,8 @@ func _ability(seat: int, c: Dictionary) -> String:
 
 func _start_wave() -> void:
 	phase = "combat"
+	_wave_hq = 0
+	_wave_leak_n = 0
 	drafts = {}
 	offer = {}
 	_undo = {}
@@ -1411,12 +1416,18 @@ func _move_enemies(dt: float) -> void:
 			if not enemies.has(en):
 				continue
 		if en["dist"] >= path.size() - 1 + 0.6:
-			hp -= int(d["hit"])
+			_wave_leak_n += 1
+			var dmg := int(d["hit"])
+			if _wave_leak_n <= GData.LEAK_FREE and not GData.is_boss(en["type"]):
+				dmg = 0      # 처음 몇 마리는 방벽이 막는다
+			dmg = clampi(dmg, 0, maxi(GData.HQ_WAVE_CAP - _wave_hq, 0))
+			_wave_hq += dmg
+			hp -= dmg
 			gate_dmg[int(en["e"])] += int(d["hit"])
 			if int(en["e"]) < _wave_leaks.size():
 				_wave_leaks[int(en["e"])] += 1
 			leaks[en["type"]] = int(leaks.get(en["type"], 0)) + 1
-			fx.append({"k": "hit", "n": int(d["hit"]), "e": int(en["e"])})
+			fx.append({"k": "hit", "n": dmg, "e": int(en["e"]), "blocked": dmg == 0})
 			enemies.erase(en)
 			version += 1
 			if hp <= 0:
@@ -2048,11 +2059,10 @@ func _finish_wave() -> void:
 	summary = {"wave": wave, "leaks": _wave_leaks.duplicate(), "gold": gold, "reward": ""}
 	_role_income()
 	_log_hp()
-	if wave >= GData.LAST_WAVE:
+	if wave >= GData.LAST_WAVE and not endless:      # 25웨이브 방어 성공 → 무한 방어로 계속
 		cleared = true
-		phase = "over"
-		version += 1
-		return
+		endless = true
+		fx.append({"k": "endless"})
 	var boss := wave % GData.THEME_LEN == 0
 	if boss:
 		for p in players:
@@ -2119,7 +2129,7 @@ func to_data() -> Dictionary:
 	for s in players.size():
 		undo.append(can_undo(s))
 	return {"ph": phase, "w": wave, "hp": hp, "pl": players, "tw": ts, "dr": dr, "sm": summary, "wp": plan, "sd": seed_,
-		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "of": offer, "sk": shared_kills, "gd": gate_dmg,
+		"cl": cleared, "fw": failed_wave, "tm": time, "v": version, "pa": board.to_data(), "op": board.opened, "ex": board.extra, "of": offer, "sk": shared_kills, "en": endless, "gd": gate_dmg,
 		"lk": leaks, "sp": speed, "cc": can_call(), "al": enemies.size(), "un": undo, "it": _ice_data(), "hl": hp_log, "rq": _queue_rows(), "wl": _walls_data(), "rl": rx_log, "sr": seen_rx, "jd": snappedf(joint_dmg, 1.0), "tl": _tower_log_data()}
 
 
@@ -2191,6 +2201,7 @@ func load_data(d: Dictionary) -> void:
 	board.extra = int(d.get("ex", 0))
 	offer = d.get("of", {}) if d.get("of", {}) is Dictionary else {}
 	shared_kills = int(d.get("sk", 0))
+	endless = bool(d.get("en", false))
 	gate_dmg = []
 	for v in d["gd"]:
 		gate_dmg.append(int(v))

@@ -33,6 +33,8 @@ const THEME_LEN := 5
 const CASTLE_HP := 100
 const START_GOLD := 320
 const REWARD_HEAL := 10
+const LEAK_FREE := 2          # 웨이브마다 처음 새는 적 2마리는 본부 방벽이 막는다 (피해 0)
+const HQ_WAVE_CAP := 50       # 한 웨이브에 본부가 잃는 내구도 상한 (한 번에 무너지지 않게)
 const REWARD_GOLD := 150
 const REWARDS := {"heal": "본부 내구도 +10", "gold": "전원 +150G", "up": "전원 무료 강화 1회"}
 const SELL_RATE := 0.8
@@ -55,7 +57,7 @@ const HAND_SIZE := 6          # 준비 시작 때 나오는 카드 수
 const REROLL_COST := 30       # 다시 뽑기 (테마마다 첫 번은 무료)
 const TEAM_KIT_BONUS := 6     # 팀 공구함이 서로 다른 n종 이상이면 공사 자재 +1
 
-static var hp_mul := 4.6      # 적 체력 배율 (밸런스 조정용)
+static var hp_mul := 6.6      # 적 체력 배율 (밸런스 조정용)
 static var budget_scale := {1: 0.75, 2: 0.75, 3: 0.92, 4: 0.78}
 static var hp_scale := {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.05}
 const DIFFICULTY := {"easy": [0.8, 0.85, "느긋"], "normal": [1.0, 1.0, "보통"], "hard": [1.25, 1.15, "빡빡"]}      # [적 체력, 위협 예산]

@@ -1065,6 +1065,9 @@ func _enter_game() -> void:
 	_notice_t = 3.5 if _theme > 0 else 0.0
 	_zoom = 2
 	_cam = Vector2(GData.CASTLE.get_center()) - Vector2(4, 0)
+	if s != null and s.m != null:      # 시작은 내 입구 쪽 (적이 나오는 곳이 보이게)
+		var lane := clampi(s.seat, 0, s.m.board.paths.size() - 1)
+		_cam = Vector2(s.m.board.paths[lane][0]) + Vector2(9, 0)
 	_clamp_cam()
 	_overview_t = 1.2
 	_last_phase = ""
@@ -1273,8 +1276,9 @@ func _take_chat() -> void:
 	_chat_key = key
 	chat_box.clear()
 	var rows: Array = s.chat
-	if _screen == "game" and not chat_open:
-		rows = rows.slice(maxi(rows.size() - 3, 0))
+	var peek := _screen == "game" and not chat_open
+	if peek:
+		rows = rows.slice(maxi(rows.size() - 1, 0))
 	for row in rows:
 		var who := int(row["seat"])
 		if _muted.has(who):
@@ -1297,7 +1301,7 @@ func _take_chat() -> void:
 		else:
 			if who < 0:
 				chat_box.push_color(SUB)
-			chat_box.add_text(str(row["text"]))
+			chat_box.add_text(_fit(str(row["text"]), T.LABEL, 120.0) if peek else str(row["text"]))
 			if who < 0:
 				chat_box.pop()
 		chat_box.newline()
@@ -1359,6 +1363,10 @@ func _take_fx() -> void:
 			"ability":
 				_fxs.append({"k": "ability", "a": Vector2(f["x"], f["y"]), "o": int(f["o"]), "t": 0.9, "life": 0.9})
 			"hit":
+				if bool(f.get("blocked", false)):
+					sfx.play("en_hit_armor")
+					_fxs.append({"k": "gate", "e": int(f.get("e", 0)), "n": 0, "t": 1.0, "life": 1.0})
+					continue
 				sfx.play("hq_hit")
 				sfx.play("en_leak")
 				_hq_hit_t = 0.0
@@ -1435,6 +1443,9 @@ func _take_fx() -> void:
 				_snd["cross"] = int(f.get("cross", 0))
 			"open":
 				sfx.play("wv_boss", 0.6)
+			"endless":
+				sfx.play("wv_reward")
+				_say("%d웨이브 돌파! 이제부터 무한 방어 · 어디까지 버틸까요" % GData.LAST_WAVE)
 	s.fx = []
 	if _fxs.size() > 140:
 		_fxs = _fxs.slice(_fxs.size() - 140)
@@ -1446,6 +1457,13 @@ func _sound_tick(m: GMatch) -> void:
 	var was := str(_snd.get("phase", ph))
 	if ph != was:
 		if ph == "combat":
+			var lane := 0      # 웨이브 시작: 내 길(없으면 첫 적이 나오는 길) 입구를 한 번 비춘다
+			for e in m.board.paths.size():
+				if m.lane_owner(e) == s.seat:
+					lane = e
+			if not m.plan.is_empty() and m.lane_owner(lane) != s.seat:
+				lane = clampi(int(m.plan[0][0]), 0, m.board.paths.size() - 1)
+			_cam_to(Vector2(m.board.paths[lane][0]) + Vector2(9, 0))
 			sfx.play("wv_boss" if m.wave % GData.THEME_LEN == 0 else "wv_start")
 			if m.wave % GData.THEME_LEN == 0:
 				sfx.play("en_boss_roar", 0.8)
@@ -1464,6 +1482,11 @@ func _sound_tick(m: GMatch) -> void:
 		sfx.play("hq_stage")
 		_hq_stage_t = 0.0
 	_snd["stage"] = stage
+	var warn := 0 if m.hp > 50 else (1 if m.hp > 25 else 2)      # 내구도 50·25 경고
+	if warn > int(_snd.get("warn", warn)):
+		_say("본부 내구도 %d · %s" % [m.hp, "보스 보상에서 수리를 골라요" if warn == 1 else "위험! 새는 길을 막아요"])
+		sfx.play("ping_warn")
+	_snd["warn"] = warn
 	var cells := (_trail.get("cells", []) as Array).size()
 	if cells > int(_snd.get("trail", 0)):
 		sfx.play("rd_tick", 0.6)
@@ -1855,8 +1878,8 @@ func _update_inspector(prep: bool) -> void:
 	var rr := _inspector_rect(m, t) if not t.is_empty() else Rect2()
 	invest_btn.position = Vector2(rr.position.x + 8, rr.end.y - 56)
 	invest_btn.size = Vector2(rr.size.x - 16, 48)
-	noinv_btn.position = Vector2(rr.end.x - 96, rr.position.y + 6)
-	noinv_btn.size = Vector2(90, 28)
+	noinv_btn.position = Vector2(rr.end.x - 38, rr.position.y + 8)
+	noinv_btn.size = Vector2(30, 30)
 	_vis(invest_btn, show_invest)
 	_vis(noinv_btn, show_noinv)
 	for k in prio_btns:
@@ -1888,7 +1911,7 @@ func _save_record() -> void:
 		return
 	_record_done = true
 	var m := s.m
-	var reached := m.wave if not m.cleared else GData.LAST_WAVE
+	var reached := m.wave
 	if reached <= int(_record.get("wave", 0)):
 		return
 	var friends := []
@@ -2389,6 +2412,14 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 				return
 			if i < slot_btns.size() and not slot_btns[i].disabled:
 				_on_slot(i)
+			elif i < slot_btns.size():      # 못 짓는 칸: 앞서 고른 포탑으로 계속 짓지 않게 짓기를 끈다
+				var kit: Array = s.m.players[s.seat]["kit"]
+				if mode.begins_with("build:"):
+					mode = ""
+				if i < kit.size():
+					var kc := int(GData.TOWERS[kit[i]]["cost"])
+					_say("%s · %s" % [GData.TOWERS[kit[i]]["name"], "골드가 부족해요 (%d)" % kc if int(s.m.players[s.seat]["gold"]) < kc else "지금은 지을 수 없어요"])
+					sfx.play("bd_deny")
 		KEY_K:
 			if not build_btns["kit"].disabled:
 				_toggle_kit()
@@ -3555,8 +3586,9 @@ func _draw_fx() -> void:
 				var lane := int(f["e"])
 				if lane < s.m.board.paths.size():
 					var g := _p(Vector2(s.m.board.paths[lane][0]) + Vector2(0.5, -0.3)) + Vector2(0, -(1.0 - k) * 24.0)
-					_t(g + Vector2(1, 1), "-%d" % int(f["n"]), T.BIG, Color(0, 0, 0, k * 0.7), 1)
-					_t(g, "-%d" % int(f["n"]), T.BIG, Color(DANGER, k), 1)
+					var gt := "-%d" % int(f["n"]) if int(f["n"]) > 0 else "방벽"
+					_t(g + Vector2(1, 1), gt, T.BIG, Color(0, 0, 0, k * 0.7), 1)
+					_t(g, gt, T.BIG, Color(DANGER if int(f["n"]) > 0 else ICE, k), 1)
 			"hit":
 				if not bool(cfg["dmg"]):
 					continue
@@ -3687,20 +3719,21 @@ func _draw() -> void:
 func _draw_wave_slide(m: GMatch) -> void:
 	var boss := m.wave % GData.THEME_LEN == 0
 	var text := "WAVE %02d" % m.wave
-	var w := 300.0
-	var x := 640.0 - w * 0.5
+	var wv: Rect2 = _ly()["wave"]      # 위쪽 웨이브 칸 자리에 덮어 그린다 (지도를 가리지 않게)
+	var w := wv.size.x
+	var x := wv.position.x
 	if _banner_t < 0.25:
 		var q := 1.0 - _banner_t / 0.25
 		x -= q * q * 700.0
 	elif _banner_t > 1.5:
 		var q := (_banner_t - 1.5) / 0.3
 		x += q * q * 700.0
-	var r := Rect2(_ev(Vector2(x, 206)), Vector2(w, 52))
+	var r := Rect2(_ev(Vector2(x, wv.position.y)), Vector2(w, wv.size.y))
 	_prect(r, OUTLINE)
 	_prect(r.grow(-2), Color("1A1714"))
 	for i in 3:      # 왼쪽 경고 줄무늬
-		_prect(Rect2(r.position + Vector2(8 + i * 8, 8), Vector2(4, 36)), DANGER if boss else AMBER)
-	_tx(Rect2(r.position + Vector2(40, 0), Vector2(w - 50, r.size.y)), text, T.BIG, DANGER if boss else AMBER)
+		_prect(Rect2(r.position + Vector2(8 + i * 8, 6), Vector2(4, r.size.y - 12)), DANGER if boss else AMBER)
+	_tx(Rect2(r.position + Vector2(40, 0), Vector2(w - 50, r.size.y)), text, T.STRONG, DANGER if boss else AMBER)
 	if boss:
 		_tx(Rect2(r.position + Vector2(40, 0), Vector2(w - 54, r.size.y)), "대장", T.STRONG, INK, 2)
 
@@ -3843,7 +3876,7 @@ func _draw_lobby() -> void:
 	var code: String = _room_code() if s.is_host or net.code() != "" else "연결 중"
 	if s.solo:
 		code = "혼자 연습"
-	if s.is_host and net.status() != "hosting":
+	if s.is_host and net.status() != "hosting" and not s.solo:
 		code = "여는 중…" if net.status() != "error" else "실패"
 	_tx(Rect2(cr.position + Vector2(12, 0), Vector2(80, cr.size.y)), "방 코드", T.LABEL, SUB)
 	_tx(Rect2(cr.position + Vector2(100, 0), Vector2(220, cr.size.y)), code.to_upper(), T.STRONG, AMBER)
@@ -3943,9 +3976,9 @@ func _draw_crew(i: int) -> void:
 		role += " · " + str(GData.ROLES[rk]["name"])
 	elif s.solo and str(s.seats[i]["token"]) == "bot":
 		role += " · 역할 자동"
-	_tx(Rect2(at + Vector2(10, 40), Vector2(140, 24)), role, T.LABEL, SUB)
+	_tx(Rect2(at + Vector2(10, 48), Vector2(146, 24)), _fit(role, T.LABEL, 146), T.LABEL, SUB)
 	for c in 4:
-		var r := Rect2(at + Vector2(10 + c * 28, 70), Vector2(24, 24))
+		var r := Rect2(at + Vector2(10 + c * 28, 78), Vector2(24, 24))
 		var taken := false
 		for k in s.seats.size():
 			if k != i and int(s.seats[k]["col"]) == c:
@@ -3989,10 +4022,21 @@ func _draw_lobby_kit() -> void:
 			_prect(Rect2(c.end.x - 22, c.position.y + 10, 14, 14), OUTLINE)
 			_prect(Rect2(c.end.x - 20, c.position.y + 12, 10, 10), OWNER[int(s.seats[who]["col"]) % 4])
 		var lines := _wrap(str(rd["passive"]), T.LABEL, c.size.x - 16)
-		for j in mini(lines.size(), 3):
-			_tx(Rect2(c.position + Vector2(8, 36 + j * 22), Vector2(c.size.x - 16, 22)), lines[j], T.LABEL, SUB)
-		_tx(Rect2(c.position + Vector2(8, 108), Vector2(c.size.x - 16, 22)), "R · %s" % rd["ability"], T.LABEL, AMBER)
-		_tx(Rect2(c.position + Vector2(8, 130), Vector2(c.size.x - 16, 22)), str(rd["job"]), T.LABEL, Color("8C939A"))
+		for j in mini(lines.size(), 4):
+			_tx(Rect2(c.position + Vector2(8, 34 + j * 22), Vector2(c.size.x - 16, 22)), lines[j] if j < 3 or lines.size() <= 4 else _fit(lines[j] + "…", T.LABEL, c.size.x - 16), T.LABEL, SUB)
+		_tx(Rect2(c.position + Vector2(8, 128), Vector2(c.size.x - 16, 22)), _fit("R · %s" % rd["ability"], T.LABEL, c.size.x - 16), T.LABEL, AMBER)
+		if role_pick_btns[i].is_hovered():      # 이 역할이 팀에서 하는 일 · 능력 설명
+			_tip(Vector2(c.get_center().x, c.position.y - 30), "%s · %s" % [rd["job"], rd["ab_desc"]])
+
+
+## 한 줄에 안 들어가면 뒤를 자르고 … 를 붙인다
+func _fit(text: String, st: int, w: float) -> String:
+	if _sz(text, st).x <= w:
+		return text
+	var t := text
+	while t.length() > 1 and _sz(t + "…", st).x > w:
+		t = t.left(t.length() - 1)
+	return t + "…"
 
 
 ## 폭에 맞춰 줄 나누기 (어절 단위)
@@ -4247,6 +4291,11 @@ func _draw_reward(m: GMatch) -> void:
 		_icon(row[0], box.grow(-14))
 		_t(Vector2(c.get_center().x, c.position.y + 88), str(row[1]), T.STRONG, INK, 1)
 		_t(Vector2(c.get_center().x, c.position.y + 118), str(row[2]), T.LABEL, SUB, 1)
+		if k == "heal" and m.hp <= 50:      # 본부가 위험하면 수리 추천
+			var tag := Rect2(c.position + Vector2(c.size.x - 58, 6), Vector2(52, 22))
+			_prect(tag, OUTLINE)
+			_prect(tag.grow(-2), DANGER)
+			_tx(tag, "추천", T.LABEL, Color.WHITE, 1)
 		var dots := []
 		for p in m.players:
 			if str(p.get("vote", "")) == k:
@@ -4936,7 +4985,8 @@ func _draw_kit(m: GMatch) -> void:
 	var hand: Array = me["hand"]
 	var lock := str(me["lock"])
 	var need := GData.KIT_SIZE - (1 if lock != "" else 0)
-	var r := Rect2(230, 394, 794, 218)
+	var cw := 136.0
+	var r := Rect2(230, 394, maxf(794.0, 16.0 + hand.size() * (cw + 6.0)), 218)
 	_nine(r, "panel_steel")
 	var head := Rect2(r.position + Vector2(12, 8), Vector2(r.size.x - 24, 28))
 	var title := "%s 포탑 고르기 %d/%d" % [GData.THEMES[GData.theme_of(m.wave)]["name"], _kit_pick.size(), need]
@@ -4974,7 +5024,6 @@ func _draw_kit(m: GMatch) -> void:
 		tx += 16 + minf(_sz(line, T.LABEL).x, 360) + 20
 	# 카드 6장
 	var my_col := int(me.get("col", 0)) % 4
-	var cw := 124.0
 	var fresh := GData.fresh_unlocks(m.wave)
 	for i in hand.size():
 		var k: String = hand[i]
@@ -4989,28 +5038,26 @@ func _draw_kit(m: GMatch) -> void:
 		elif pick_btns[i].is_hovered():
 			_prect(c.grow(-2), Color("8C939A"), false, 2.0)
 		_tx(Rect2(c.position + Vector2(6, 4), Vector2(20, 20)), str(i + 1), T.KEY, SUB)
+		_tx(Rect2(c.end.x - 50, c.position.y + 4, 44, 20), str(int(GData.TOWERS[k]["cost"])), T.KEY, AMBER, 2)      # 값: 오른쪽 위
 		if fresh.has(k):
-			_prect(Rect2(c.end.x - 40, c.position.y + 6, 34, 18), AMBER)
-			_tx(Rect2(c.end.x - 40, c.position.y + 4, 34, 20), "NEW", T.KEY, AMBER_INK, 1)
+			_prect(Rect2(c.position.x + 20, c.position.y + 6, 34, 18), AMBER)
+			_tx(Rect2(c.position.x + 20, c.position.y + 4, 34, 20), "NEW", T.KEY, AMBER_INK, 1)
 		if GData.is_joint(k):
-			_prect(Rect2(c.position.x + 4, c.position.y + 4, c.size.x - 8, 2), AMBER)
-			_tx(Rect2(c.end.x - 52, c.position.y + 4, 48, 22), "합동", T.LABEL, AMBER, 2)
+			_prect(Rect2(c.position.x + 4, c.position.y + 26, c.size.x - 8, 2), AMBER)
+			_tx(Rect2(c.position.x + 20, c.position.y + 4, 48, 22), "합동", T.LABEL, AMBER)
 		_tower_icon(k, 1, "", my_col, Rect2(c.position + Vector2((cw - 50) * 0.5, 4), Vector2(50, 50)))
 		_tx(Rect2(c.position + Vector2(6, 56), Vector2(cw - 12, 24)), str(GData.TOWERS[k]["name"]), T.LABEL, INK)
 		var row2 := Rect2(c.position + Vector2(8, 82), Vector2(cw - 16, 24))
-		_tx(row2, str(int(GData.TOWERS[k]["cost"])), T.KEY, AMBER, 2)
 		var st := str(GData.tower_stats(k, 1, "")["st"])
 		if st != "":
 			_prect(Rect2(row2.position + Vector2(0, 6), Vector2(12, 12)), OUTLINE)
 			_prect(Rect2(row2.position + Vector2(2, 8), Vector2(8, 8)), Color(str(GData.STATUS[st]["col"])))
-			_tx(Rect2(row2.position + Vector2(16, 0), Vector2(70, 24)), str(GData.STATUS[st]["name"]), T.LABEL, SUB)
+			_tx(Rect2(row2.position + Vector2(16, 0), Vector2(cw - 32, 24)), "%s 남김" % GData.STATUS[st]["name"], T.LABEL, SUB)
 		else:
-			_tx(Rect2(row2.position, Vector2(70, 24)), "상태 없음", T.LABEL, Color("6A6660"))
+			_tx(Rect2(row2.position, Vector2(cw - 16, 24)), "상태 없음", T.LABEL, Color("6A6660"))
 		var fit := _card_fit(m, k)
 		if not fit.is_empty():
-			var line := str(fit[0])
-			while line.length() > 2 and _sz(line, T.LABEL).x > cw - 12:
-				line = line.left(line.length() - 1)
+			var line := _fit(str(fit[0]), T.LABEL, cw - 12)
 			_tx(Rect2(c.position + Vector2(6, 112), Vector2(cw - 12, 24)), line, T.LABEL, fit[1])
 	pick_go.position = Vector2(r.end.x - 178, r.position.y + 8)
 	pick_go.size = Vector2(166, 48)
@@ -5047,7 +5094,7 @@ func _card_fit(m: GMatch, k: String) -> Array:
 			for o in theirs:
 				var rx := GData.reaction_of(st, str(o))
 				if rx != "":
-					return ["%s · %s" % [GData.REACTIONS[rx]["name"], str(m.players[i]["name"]).left(4)], OWNER_TEXT[int(m.players[i].get("col", i)) % 4]]
+					return ["%s·%s" % [GData.REACTIONS[rx]["name"], str(m.players[i]["name"]).left(3)], OWNER_TEXT[int(m.players[i].get("col", i)) % 4]]
 	var kinds := {}
 	for g in m.wave_plan():
 		kinds[str(g[1])] = true
@@ -5106,7 +5153,9 @@ func _draw_inspector(m: GMatch, top: float) -> void:
 	_nine(head, "panel_well")
 	_tower_icon(t["type"], lv, str(t["branch"]), col, head.grow(-4))
 	var tx := head.end.x + 10
-	_tx(Rect2(tx, r.position.y + 8, r.end.x - tx - 8, 28), str(d["name"]), T.STRONG, INK)
+	var name_w := r.end.x - tx - (48.0 if noinv_btn.visible else 8.0)
+	var nst := T.STRONG if _sz(str(d["name"]), T.STRONG).x <= name_w else T.LABEL
+	_tx(Rect2(tx, r.position.y + 8, name_w, 28), _fit(str(d["name"]), nst, name_w), nst, INK)
 	var mk := "MK-%d" % lv if lv < 3 else "MK-3%s" % str(t["branch"]).to_upper()
 	if GData.is_joint(str(t["type"])):
 		mk = "합동"
@@ -5217,18 +5266,23 @@ func _draw_insp_buttons(m: GMatch, t: Dictionary, mine: bool, prep: bool, lv: in
 			why = "주인이 강화하면 돼요"
 		_tx(ir, why, T.BODY, AMBER_INK if not invest_btn.disabled else SUB, 1)
 	if noinv_btn.visible:
-		_tx(Rect2(noinv_btn.position, noinv_btn.size), "투자 허용" if bool(t.get("noinv", false)) else "투자 막기", T.LABEL, INK, 1)
+		var nb := Rect2(noinv_btn.position, noinv_btn.size)
+		var closed := bool(t.get("noinv", false))
+		_nine(nb, "panel_amber" if closed else "panel_dark")
+		_lock_glyph(nb.get_center(), AMBER_INK if closed else SUB)
+		if noinv_btn.is_hovered():
+			_tip(Vector2(nb.get_center().x - 60, nb.end.y + 22), "투자 허용하기" if closed else "남의 투자 막기")
 	if sell_btn.visible:
 		var sr := Rect2(sell_btn.position, sell_btn.size)
-		_tx(Rect2(sr.position + Vector2(0, 2), Vector2(sr.size.x, 26)), "환불" if bool(t.get("fresh", false)) else "판매", T.BODY, INK, 1)
-		_tx(Rect2(sr.position + Vector2(0, 24), Vector2(sr.size.x, 22)), "+%d" % m.sell_value(t), T.KEY, SUB, 1)
+		_tx(Rect2(sr.position + Vector2(0, 2), Vector2(sr.size.x, 22)), "환불" if bool(t.get("fresh", false)) else "판매", T.LABEL, INK, 1)
+		_tx(Rect2(sr.position + Vector2(0, 26), Vector2(sr.size.x, 18)), "+%d" % m.sell_value(t), T.KEY, SUB, 1)
 	if up_btn.visible:
 		var ur := Rect2(up_btn.position, up_btn.size)
 		var ink := AMBER_INK if not up_btn.disabled else SUB
 		var free := int(m.players[s.seat].get("free_up", 0)) > 0
-		_tx(Rect2(ur.position + Vector2(0, 2), Vector2(ur.size.x, 26)), "강화" if lv == 1 else "MK-3", T.BODY, ink, 1)
+		_tx(Rect2(ur.position + Vector2(0, 2), Vector2(ur.size.x, 22)), "강화" if lv == 1 else "MK-3", T.LABEL, ink, 1)
 		var left := maxi(m.next_up_cost(t) - m.invest_gauge(t), 0)
-		_tx(Rect2(ur.position + Vector2(0, 24), Vector2(ur.size.x, 22)), "FREE" if free or left == 0 else str(left), T.KEY, ink, 1)
+		_tx(Rect2(ur.position + Vector2(0, 26), Vector2(ur.size.x, 18)), "FREE" if free or left == 0 else str(left), T.KEY, ink, 1)
 	if a_btn.visible:
 		for k in 2:
 			var b: Button = a_btn if k == 0 else b_btn
@@ -5333,8 +5387,8 @@ func _draw_result() -> void:
 		_t(Vector2(32, 24), "연결이 끊겼어요", T.BIG, LAMP)
 		_t(Vector2(32, 68), "방장과 연결이 끊겼어요 · 패배 기록이 아니에요", T.LABEL, SUB)
 	elif m != null and m.cleared:
-		_t(Vector2(32, 24), "%d웨이브 방어 성공" % GData.LAST_WAVE, T.BIG, AMBER)
-		_t(Vector2(32, 68), "다섯 테마를 모두 버텨냈어요 · 다음엔 더 적은 피해로?", T.LABEL, SUB)
+		_t(Vector2(32, 24), "무한 방어 %d웨이브" % maxi(m.failed_wave - 1, GData.LAST_WAVE), T.BIG, AMBER)
+		_t(Vector2(32, 68), "%d웨이브를 넘겨 다섯 테마를 모두 버텼어요 · 다음엔 더 멀리?" % GData.LAST_WAVE, T.LABEL, SUB)
 	else:
 		_t(Vector2(32, 24), "본부가 무너졌어요", T.BIG, LAMP)
 		if m != null:
@@ -5356,7 +5410,7 @@ func _draw_result() -> void:
 		_tx(Rect2(rb.position + Vector2(0, 44), Vector2(rb.size.x, 24)), "같은 팀 · 바로 시작" if s.is_host else "방장이 고르는 중", T.LABEL, ink, 1)
 	if m == null:
 		return
-	var held: int = GData.LAST_WAVE if m.cleared else maxi(m.failed_wave - 1, 0)
+	var held: int = maxi(m.failed_wave - 1, GData.LAST_WAVE if m.cleared else 0)
 	var total_kills := 0
 	for p in m.players:
 		total_kills += int(p["kills"])
@@ -5419,7 +5473,7 @@ func _draw_result() -> void:
 	var row_h := 24.0
 	for e in lanes:
 		var y := lk.position.y + 38 + e * row_h
-		_tx(Rect2(lk.position.x + 10, y - 5, 90, 24), "%d번 길" % (e + 1), T.LABEL, INK)
+		_tx(Rect2(lk.position.x + 10, y - 5, 90, 24), ("%d번 길" if m.lane_owner(e) >= 0 else "%d번 새") % (e + 1), T.LABEL, INK if m.lane_owner(e) >= 0 else SUB)
 		var wv := 360.0 * float(m.gate_dmg[e]) / most
 		if int(m.gate_dmg[e]) > 0:
 			_prect(Rect2(lk.position.x + 100, y, wv, 14), OUTLINE)
@@ -5427,17 +5481,18 @@ func _draw_result() -> void:
 		_tx(Rect2(lk.position.x + 110 + wv, y - 5, 60, 24), str(int(m.gate_dmg[e])), T.KEY, INK)
 	# 팀 기록
 	var n := m.players.size()
-	var rh := 80.0 if n <= 2 else 44.0
+	var rh := 66.0 if n <= 2 else 40.0
 	var tb := Rect2(684, 114, 562, 44 + n * (rh + 8))
 	_nine(tb, "panel_steel")
 	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(200, 24)), "팀 기록", T.LABEL, SUB)
-	_tx(Rect2(tb.position + Vector2(10, 8), Vector2(tb.size.x - 20, 24)), "함께 만든 피해 %s" % _kilo(m.joint_dmg), T.LABEL, AMBER, 2)
 	var together := m.board.shared_cells().size()
-	if together > 0 or m.shared_kills > 0:      # 합류·교차 협동 기록
-		var sr := Rect2(tb.position.x, tb.end.y + 6, tb.size.x, 32)
-		_nine(sr, "panel_dark")
-		_tx(Rect2(sr.position + Vector2(10, 0), sr.size - Vector2(20, 0)), "함께 막은 구간 %d칸 · 공동 구간에서 막은 적 %d" % [together, m.shared_kills], T.LABEL, AMBER)
-	var cols := [["피해", 880.0], ["처치", 950.0], ["포탑", 1020.0], ["길", 1090.0], ["투자", 1170.0]]
+	var sr := Rect2(tb.position.x, tb.end.y + 4, tb.size.x, 30)      # 협동 기록 한 줄
+	_nine(sr, "panel_dark")
+	var coop := "함께 만든 피해 %s" % _kilo(m.joint_dmg)
+	if together > 0 or m.shared_kills > 0:
+		coop += " · 함께 막은 구간 %d칸 · 공동 구간 적 %d" % [together, m.shared_kills]
+	_tx(Rect2(sr.position + Vector2(10, 0), sr.size - Vector2(20, 0)), _fit(coop, T.LABEL, sr.size.x - 20), T.LABEL, AMBER)
+	var cols := [["피해", 934.0], ["처치", 1004.0], ["포탑", 1064.0], ["길", 1120.0], ["투자", 1192.0]]
 	for c in cols:
 		_tx(Rect2(c[1] - 40, tb.position.y + 8, 80, 24), c[0], T.LABEL, SUB, 1)
 	var top_dmg := -1
@@ -5461,7 +5516,7 @@ func _draw_result() -> void:
 			"chief": badge = "반장 · 길 %d번" % int(p.get("roads", 0))
 			"supply": badge = "보급 · %d골드" % int(p.get("given", 0))
 			"mech": badge = "정비 · 투자 %d" % int(p.get("inv", 0))
-			"fire": badge = "화력 · 피해 %s" % _kilo(float(p["dmg"]))
+			"fire": badge = "화력 · 주 피해"
 		if badge == "":
 			if i == top_road:
 				badge = "길 담당"
@@ -5469,8 +5524,8 @@ func _draw_result() -> void:
 				badge = "최다 피해"
 		if badge != "" and n <= 2:
 			var bwid := _ev(Vector2(_sz(badge, T.LABEL).x + 12, 0)).x
-			_prect(Rect2(row.position + Vector2(42, 42), Vector2(bwid, 22)), AMBER)
-			_t(row.position + Vector2(48, 42), badge, T.LABEL, AMBER_INK)
+			_prect(Rect2(row.position + Vector2(42, 38), Vector2(bwid, 22)), AMBER)
+			_t(row.position + Vector2(48, 38), badge, T.LABEL, AMBER_INK)
 		var towers := 0
 		for id in m.towers:
 			if int(m.towers[id]["owner"]) == i:
@@ -5478,13 +5533,14 @@ func _draw_result() -> void:
 		var vals := [_kilo(float(p["dmg"])), str(int(p["kills"])), str(towers), str(int(p.get("roads", 0))), str(int(p.get("inv", 0)))]
 		var cy := row.position.y + row.size.y * 0.5 - 16
 		for k in 5:
-			_tx(Rect2(cols[k][1] - 40, row.position.y, 80, row.size.y), vals[k], T.STRONG if n <= 2 else T.LABEL, INK, 1)
+			var vst := T.STRONG if n <= 2 and _sz(vals[k], T.STRONG).x <= 70 else T.LABEL
+			_tx(Rect2(cols[k][1] - 38, row.position.y, 76, row.size.y), vals[k], vst, INK, 1)
 	# 가장 일 많이 한 포탑
 	var best := -1
 	for id in m.tower_log:
 		if best < 0 or float(m.tower_log[id][4]) > float(m.tower_log[best][4]):
 			best = id
-	var mv := Rect2(684, tb.end.y + 8, 562, 0)
+	var mv := Rect2(684, tb.end.y + 40, 562, 0)      # 협동 기록 한 줄 아래
 	mv.size.y = 470 - 8 - mv.position.y
 	if mv.size.y >= 60:
 		_tx(Rect2(mv.position + Vector2(8, 0), Vector2(400, 24)), "가장 일 많이 한 포탑", T.LABEL, SUB)

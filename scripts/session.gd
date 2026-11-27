@@ -234,6 +234,8 @@ func _host_tick(delta: float) -> void:
 			m.apply(1, {"op": "ready", "v": true})
 		else:
 			GBot._chip_joints(m, 1)      # 사람이 세운 합동 설비 기초에 보탠다
+	elif solo and m.phase == "combat":
+		GBot.combat_ability(m, 1)
 	# 브라우저가 탭을 가리면 프레임이 크게 줄어든다: 한 프레임에 최대 2초까지 따라잡아 실제 시간에 맞춘다
 	_acc = minf(_acc + delta * m.speed, 2.0 * m.speed)
 	while _acc >= GData.TICK:

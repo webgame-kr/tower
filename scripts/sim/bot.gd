@@ -73,6 +73,7 @@ static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := f
 	if not m.offer.is_empty() and int(m.players[seat]["mat"]) >= int(m.offer["cost"]):      # 새 입구 합류 제안은 받아 준다
 		m.apply(seat, {"op": "edit", "e": int(m.offer["e"]), "path": m.offer["path"]})
 	_spend(m, seat)      # 포탑을 먼저 놓고, 그 포탑의 사거리 안으로 길을 꺾는다
+	_support(m, seat)
 	var suggestion := {}
 	if use_roads:
 		for _n in 3:
@@ -88,6 +89,62 @@ static func play_prep(m: GMatch, seat: int, use_roads := true, suggest_only := f
 	_repair(m, seat)
 	m.apply(seat, {"op": "ready", "v": true})
 	return suggestion
+
+
+## 역할대로 팀을 돕는다: 보급은 남은 돈을 나눠 주고 보급품 투하, 정비는 팀원 포탑에 투자
+static func _support(m: GMatch, seat: int) -> void:
+	var others := []
+	for i in m.players.size():
+		if i != seat and bool(m.players[i]["online"]):
+			others.append(i)
+	if others.is_empty():
+		return
+	var poor: int = others[0]
+	for i in others:
+		if int(m.players[i]["gold"]) < int(m.players[poor]["gold"]):
+			poor = i
+	match m.role_of(seat):
+		"supply":
+			if not bool(m.players[seat].get("r_used", false)):
+				m.apply(seat, {"op": "role", "to": poor})
+			var spare := int(m.players[seat]["gold"]) / 2 / 10 * 10
+			if spare >= 40:
+				m.apply(seat, {"op": "give", "to": poor, "n": spare})
+		"mech":
+			for id in m.towers.keys():
+				var t: Dictionary = m.towers[id]
+				if int(t["owner"]) == seat or GData.is_joint(str(t["type"])) or int(m.players[seat]["gold"]) < 60:
+					continue
+				if m.next_up_cost(t) > 0:
+					m.apply(seat, {"op": "invest", "id": id})
+
+
+## 전투 중 역할 능력 (웨이브당 1번): 적이 본부 가까이 몰리면 쓴다
+static func combat_ability(m: GMatch, seat: int) -> void:
+	if m.phase != "combat" or bool(m.players[seat].get("r_used", false)) or m.enemies.size() < 4:
+		return
+	var cc := Vector2(GData.CASTLE.get_center())
+	var near := []
+	for en in m.enemies:
+		if m._pos(en).distance_to(cc) < 12.0:
+			near.append(en)
+	if near.size() < 3:
+		return
+	match m.role_of(seat):
+		"chief":
+			var en: Dictionary = near[0]
+			var path: Array = m.board.paths[int(en["e"])]
+			var ci := mini(int(float(en["dist"])) + 2, path.size() - 2)
+			m.apply(seat, {"op": "role", "x": path[ci].x, "y": path[ci].y})
+		"mech":
+			var best := -1
+			for id in m.towers:
+				if not GMatch.is_trap(m.towers[id]) and (best < 0 or int(m.towers[id]["spent"]) > int(m.towers[best]["spent"])):
+					best = id
+			if best >= 0:
+				m.apply(seat, {"op": "role", "id": best})
+		"fire":
+			m.apply(seat, {"op": "role"})
 
 
 ## 팀원이 세운 합동 설비 기초에 보탠다 (혼자서는 완성할 수 없으니)

@@ -293,7 +293,8 @@ func _flow() -> void:
 		m.step()
 		guard += 1
 	ok(m.phase == "prep" and m.wave == 2, "웨이브 종료 후 다음 준비")
-	ok(m.hp == GData.CASTLE_HP - total_enemies, "포탑 없으면 모두 도착 (%d)" % total_enemies)
+	ok(m.hp == GData.CASTLE_HP - mini(maxi(total_enemies - GData.LEAK_FREE, 0), GData.HQ_WAVE_CAP), "포탑 없으면 모두 도착 · 처음 %d마리는 방벽 (%d)" % [GData.LEAK_FREE, total_enemies])
+	ok(int(m.gate_dmg[0]) + int(m.gate_dmg[1]) == total_enemies, "입구별 기록은 새어 든 적 모두")
 	ok(int(m.players[0]["mat"]) == GData.MAT_START + GData.MAT_WAVE, "웨이브마다 자재 +3")
 	var leaked := 0
 	for v in m.summary["leaks"]:

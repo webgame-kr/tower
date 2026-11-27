@@ -44,7 +44,7 @@ func _run(players: int, sd: int) -> String:
 	for i in players:
 		m.players[i]["role"] = roles[i]
 	var guard := 0
-	while m.phase != "over" and guard < 900000:
+	while m.phase != "over" and not m.cleared and guard < 900000:
 		guard += 1
 		if m.phase == "reward":
 			for vk in m.players.size():

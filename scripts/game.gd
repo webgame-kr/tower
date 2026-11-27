@@ -214,6 +214,11 @@ const VIEW_C := Vector2(620, 364)      # 지도 화면의 가운데 (왼쪽·오
 const CAM_SPEED := 12.0
 var _branch_pick := false      # MK-3 갈래 카드를 펼쳤는지
 var _drag := {}                # 포탑 끌어 옮기기 {id, from}
+var _touches := {}             # 화면을 누른 손가락 {번호: 위치}
+var _pinch := {}               # 두 손가락: 끌어서 이동 · 벌리고 오므려 확대 {mid, dist, cam}
+var _touch_ui := false         # 마지막 입력이 터치였나 (가장자리 스크롤 끔, 손 뗄 때 짓기)
+var _tap := {}                 # 터치로 짓기·능력: 손을 뗄 때 실행 {g, at}
+var _lp := {}                  # 길게 누르기 → 핑 휠 {t, at, g}
 var _chat_seen := 0            # 접힌 채팅: 마지막으로 본 메시지 수
 var _chat_flash := 0.0         # 접힌 채팅 한 줄이 남은 시간
 var _dismissed := {}      # 거절한 동료 길 제안 (자리 -> 길)
@@ -684,7 +689,21 @@ func _evict() -> void:
 			_theme_tex.erase(key)
 
 
+## 정수 배율은 픽셀이 고르지만 태블릿·휴대폰에서는 화면이 반쯤 작아지거나 잘린다 → 그때는 꽉 차게
+func _fit_stretch() -> void:
+	var win := get_tree().root
+	var ws := Vector2(DisplayServer.window_get_size())
+	if ws.x < 2.0 or ws.y < 2.0:
+		return
+	var k := minf(ws.x / STAGE.x, ws.y / STAGE.y)
+	var frac := k < 1.0 or (DisplayServer.is_touchscreen_available() and k - floorf(k) > 0.02)
+	var want := Window.CONTENT_SCALE_STRETCH_FRACTIONAL if frac else Window.CONTENT_SCALE_STRETCH_INTEGER
+	if win.content_scale_stretch != want:
+		win.content_scale_stretch = want
+
+
 func _place() -> void:
+	_fit_stretch()
 	var v := get_viewport_rect().size
 	_off = (((v - STAGE) * 0.25).max(Vector2.ZERO).floor()) * 2.0      # 짝수 px 로
 	stage.position = _off
@@ -1088,6 +1107,7 @@ func _enter_game() -> void:
 func _process(delta: float) -> void:
 	if _screen == "game" and s != null and s.m != null and not _paused:
 		_update_camera(delta)
+		_long_press(delta)
 	_apply_camera()
 	_tick += delta
 	_toast_t -= delta
@@ -1570,7 +1590,7 @@ func _update_camera(delta: float) -> void:
 		d.y -= 1
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
 		d.y += 1
-	if bool(cfg.get("edge", true)) and _pan.is_empty() and DisplayServer.window_is_focused():
+	if bool(cfg.get("edge", true)) and _pan.is_empty() and not _touch_ui and DisplayServer.window_is_focused():
 		var mp := get_viewport().get_mouse_position()
 		var v := get_viewport_rect().size
 		if mp.x >= 0 and mp.y >= 0 and mp.x < v.x and mp.y < v.y:
@@ -2195,9 +2215,97 @@ func _on_ping_kind(k: String) -> void:
 	_set_mode("ping:" + k)
 
 
+# ── 터치: 두 손가락으로 이동·확대, 길게 눌러 핑, 손 뗄 때 짓기 ──
+
+func _input(ev: InputEvent) -> void:
+	if ev is InputEventScreenTouch:
+		_touch_ui = true
+		if ev.pressed:
+			_touches[ev.index] = ev.position
+		else:
+			_touches.erase(ev.index)
+		if _touches.size() >= 2 and _pinch.is_empty() and _screen == "game" and s != null and s.m != null:
+			_pinch_begin()
+		elif _touches.is_empty():
+			_pinch = {}
+	elif ev is InputEventScreenDrag:
+		_touches[ev.index] = ev.position
+		if not _pinch.is_empty() and _touches.size() >= 2:
+			_pinch_move()
+	elif ev is InputEventMouseMotion and ev.device != InputEvent.DEVICE_ID_EMULATION:
+		_touch_ui = false
+
+
+func _two() -> Array:
+	var ps: Array = _touches.values()
+	return [ps[0], ps[1]]
+
+
+func _pinch_begin() -> void:
+	# 첫 손가락이 시작한 일(길 그리기, 포탑 끌기, 짓기 대기, 핑)은 취소
+	_trail = {}
+	_drag = {}
+	_tap = {}
+	_lp = {}
+	_wheel = {}
+	if mode.begins_with("move:"):
+		mode = ""
+	var two := _two()
+	_pinch = {"mid": (Vector2(two[0]) + Vector2(two[1])) * 0.5, "dist": maxf(Vector2(two[0]).distance_to(two[1]), 1.0), "cam": _cam}
+
+
+func _pinch_move() -> void:
+	var two := _two()
+	var mid: Vector2 = (Vector2(two[0]) + Vector2(two[1])) * 0.5
+	var ratio: float = Vector2(two[0]).distance_to(two[1]) / float(_pinch["dist"])
+	if ratio > 1.3 and _zoom == 1:
+		_set_zoom(2, mid - _off)
+		_pinch_begin()
+		return
+	if ratio < 0.75 and _zoom == 2:
+		_set_zoom(1)
+		_pinch_begin()
+		return
+	if _zoom == 2:
+		_cam = Vector2(_pinch["cam"]) - (mid - Vector2(_pinch["mid"])) / (TILE * 2.0)
+		_overview_t = 0.0
+		_clamp_cam()
+
+
+func _long_press(delta: float) -> void:
+	if _lp.is_empty():
+		return
+	if not _pinch.is_empty() or _touches.size() != 1 or not _trail.is_empty() or mode != "":
+		_lp = {}
+		return
+	if get_local_mouse_position().distance_to(_lp["at"]) > 14.0:
+		_lp = {}
+		return
+	_lp["t"] = float(_lp["t"]) + delta
+	if float(_lp["t"]) >= 0.5:
+		_drag = {}
+		_wheel = {"at": _lp["g"], "from": Vector2(_lp["at"]) - _off}
+		_lp = {}
+		Input.vibrate_handheld(25)
+
+
+func _tap_mode() -> bool:
+	return mode.begins_with("build:") or mode == "ability" or mode.begins_with("role:") or mode.begins_with("ping:")
+
+
 func _gui_input(ev: InputEvent) -> void:
 	if s == null or s.m == null or _screen != "game":
 		return
+	if not _pinch.is_empty():      # 두 손가락 중에는 첫 손가락의 마우스 흉내를 무시
+		return
+	if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		_lp = {}
+		if not _tap.is_empty():
+			var tap := _tap
+			_tap = {}
+			if ev.position.distance_to(tap["at"]) < 16.0:
+				_click(tap["g"])
+			return
 	if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT and not _wheel.is_empty():
 		var kind := _wheel_kind()
 		var at: Vector2 = _wheel["at"]
@@ -2267,8 +2375,12 @@ func _gui_input(ev: InputEvent) -> void:
 		if ev.button_index == MOUSE_BUTTON_LEFT and inside:
 			if ev.alt_pressed:
 				_wheel = {"at": grid, "from": ev.position - _off}
+			elif ev.device == InputEvent.DEVICE_ID_EMULATION and _tap_mode():
+				_tap = {"g": grid, "at": ev.position}      # 터치: 손을 뗄 때 짓는다 (두 손가락 이동과 헷갈리지 않게)
 			else:
 				_click(grid)
+				if ev.device == InputEvent.DEVICE_ID_EMULATION and mode == "" and _trail.is_empty():
+					_lp = {"t": 0.0, "at": ev.position, "g": grid}
 
 
 ## 휠에서 고른 핑: 위 주목, 오른쪽 위험, 오른쪽 아래 건설 요청, 왼쪽 아래 길 변경, 왼쪽 내가 맡을게
@@ -2303,7 +2415,7 @@ func _draw_wheel() -> void:
 		_icon(Vector2i(i, 1), Rect2(mid + Vector2(-10, -22), Vector2(20, 20)), Color.WHITE if k == pick else PING_COL[i])
 		_t(mid + Vector2(0, 0), labels[k], T.LABEL, INK, 1)
 	_pcircle(c, 34.0, Color(0.16, 0.17, 0.19))
-	_t(c + Vector2(0, -8), "Alt", T.LABEL, SUB, 1)
+	_t(c + Vector2(0, -8), "놓기" if _touch_ui else "Alt", T.LABEL, SUB, 1)
 
 
 ## 빠른 요청 (F1~F4): Alt 를 누르고 있거나 핑 휠을 열면 보인다
@@ -4851,11 +4963,11 @@ func _draw_hint(m: GMatch) -> void:
 		var key := mode.substr(6)
 		head = str(GData.TOWERS[key]["name"])
 		val = str(int(GData.TOWERS[key]["cost"]))
-		sub = "클릭 짓기 · 우클릭 취소"
+		sub = "칸을 눌러 짓기 · 슬롯 다시 눌러 취소" if _touch_ui else "클릭 짓기 · 우클릭 취소"
 	elif mode == "ability":
 		head = "긴급 냉각"
 		val = "%d초" % int(GData.ABILITY_TIME)
-		sub = "클릭 사용 · 우클릭 취소"
+		sub = "눌러 사용 · 버튼 다시 눌러 취소" if _touch_ui else "클릭 사용 · 우클릭 취소"
 	elif mode.begins_with("road:") and _trail.is_empty():
 		head = "길 다시 그리기"
 		val = "자재 %d" % int(m.players[s.seat].get("mat", 0))
@@ -4944,7 +5056,7 @@ func _draw_bar(m: GMatch) -> void:
 		var free := int(me.get("free_up", 0))
 		_tip(Vector2(g.get_center().x + 40, g.position.y - 20), ("무료 강화 %d회" % free) if free > 0 else "웨이브마다 +%d" % GData.wave_gold(m.wave))
 	if not L["four"]:
-		_tx(Rect2(L["ping_x"], L["ping_y"] + 46, 210, 24), "핑 Alt+클릭", T.LABEL, SUB)
+		_tx(Rect2(L["ping_x"], L["ping_y"] + 46, 210, 24), "핑 길게 누르기" if _touch_ui else "핑 Alt+클릭", T.LABEL, SUB)
 	if m.phase == "reward":
 		var rr: Rect2 = L["ready"]
 		_nine(rr, "btn_disabled")
@@ -5679,9 +5791,17 @@ func _draw_pause() -> void:
 				_modal(r, "조작 안내")
 				var keys := [["WASD", "카메라 이동 · Shift 빠르게 · H 본부 · F1~F4 입구"], ["휠 Z X", "x2 / x1 확대 · 가운데·우클릭 끌기 이동"], ["1-5", "공구함 포탑 고르기 · 빈 칸 클릭"],
 					["G", "길 다시 그리기 · E 확정 · Ctrl+Z 되돌리기"], ["Q", "긴급 냉각 (전투 중 1회)"], ["Alt+클릭", "핑 · T 빠른 요청"], ["SPACE", "준비 완료 / 취소"], ["Esc", "취소 · 일시정지"]]
+				if _touch_ui:      # 태블릿·휴대폰
+					keys = [["두 손가락 끌기", "지도 이동"], ["벌리기 · 오므리기", "x2 확대 / 전체 보기"], ["미니맵 누르기", "그곳으로 이동"],
+						["슬롯 → 칸 누르기", "포탑 짓기 · 슬롯 다시 눌러 취소"], ["내 포탑 끌기", "준비 중에 옮기기"],
+						["길게 누르기", "핑 휠 · 손가락을 밀어 고르고 떼기"], ["준비 완료 버튼", "웨이브 시작"], ["오른쪽 위 II", "일시정지"]]
 				for i in keys.size():
 					var row := Rect2(320, 136 + i * 54, 640, 46)
 					_nine(row, "panel_dark")
+					if _touch_ui:
+						_t(row.position + Vector2(14, 8), str(keys[i][0]), T.STRONG, AMBER)
+						_t(row.position + Vector2(250, 8), str(keys[i][1]), T.LABEL, INK)
+						continue
 					_key_chip(row.position + Vector2(14, 12), str(keys[i][0]))
 					_t(row.position + Vector2(140, 8), str(keys[i][1]), T.LABEL, INK)
 			"codex":

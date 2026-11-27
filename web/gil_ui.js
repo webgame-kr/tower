@@ -67,3 +67,41 @@
     save: function (v) { try { localStorage.setItem("gil_name", v); } catch (e) {} }
   };
 })();
+
+// 태블릿·휴대폰: 브라우저 제스처 막기, 세로 화면 안내, 첫 터치에 전체 화면 + 가로 고정
+(function () {
+  var ua = navigator.userAgent || "";
+  var coarse = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
+    /Android|iPhone|iPad|Mobile/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  var st = document.createElement("style");
+  st.textContent = "html,body{overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}" +
+    "canvas{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}" +
+    "#gil-rotate{position:fixed;inset:0;z-index:30;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;" +
+    "background:#16191c;color:#e8e4da;font:600 18px/1.5 sans-serif;text-align:center;padding:24px}" +
+    "#gil-rotate b{font-size:44px;display:block;transform:rotate(90deg)}";
+  document.head.appendChild(st);
+  if (!coarse) return;
+  var rot = document.createElement("div");
+  rot.id = "gil-rotate";
+  rot.innerHTML = "<b>↻</b>기기를 가로로 돌려 주세요<span style='font-size:14px;opacity:.7'>길 좀 막아봐는 가로 화면에서 해요</span>";
+  function check() { rot.style.display = window.innerHeight > window.innerWidth * 1.05 ? "flex" : "none"; }
+  function ready() { document.body.appendChild(rot); check(); }
+  if (document.body) ready(); else document.addEventListener("DOMContentLoaded", ready);
+  window.addEventListener("resize", check);
+  window.addEventListener("orientationchange", function () { setTimeout(check, 200); });
+  var tried = false;
+  document.addEventListener("touchend", function (e) {
+    if (tried || (e.target && e.target.tagName === "INPUT")) return;
+    tried = true;
+    var el = document.documentElement;
+    var req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!req || document.fullscreenElement || document.webkitFullscreenElement) return;
+    try {
+      var pr = req.call(el, { navigationUI: "hide" });
+      if (pr && pr.then) pr.then(function () {
+        if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function () {});
+      }).catch(function () {});
+    } catch (err) {}
+  }, { passive: true });
+  document.addEventListener("dblclick", function (e) { e.preventDefault(); }, { passive: false });
+})();
